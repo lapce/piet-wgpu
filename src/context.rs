@@ -246,11 +246,30 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let texture = self
+            .renderer
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("Multisampled frame descriptor"),
+                size: wgpu::Extent3d {
+                    width: self.renderer.pipeline.size.width as u32,
+                    height: self.renderer.pipeline.size.height as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 4,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            });
+        let msaa = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         self.renderer.pipeline.draw(
             &self.renderer.device,
             &mut encoder,
             &mut self.renderer.queue,
             &view,
+            &msaa,
             &self.geometry,
         );
         // for element in &self.elements {

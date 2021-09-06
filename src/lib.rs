@@ -36,6 +36,7 @@ pub struct WgpuRenderer {
     format: wgpu::TextureFormat,
     staging_belt: wgpu::util::StagingBelt,
     local_pool: futures::executor::LocalPool,
+    texture: wgpu::Texture,
 
     font: FontSource,
     text: WgpuText,
@@ -69,8 +70,21 @@ impl WgpuRenderer {
         let quad_pipeline = quad::Pipeline::new(&device);
         let pipeline = pipeline::Pipeline::new(&device);
 
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Multisampled frame descriptor"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 4,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        });
+
         let font = FontSource::new();
-        font.load(&FontFamily::SYSTEM_UI);
 
         Ok(Self {
             instance,
@@ -82,6 +96,7 @@ impl WgpuRenderer {
             format,
             staging_belt,
             local_pool,
+            texture,
             quad_pipeline,
             pipeline,
         })
@@ -96,6 +111,19 @@ impl WgpuRenderer {
             present_mode: wgpu::PresentMode::Mailbox,
         };
         self.surface.configure(&self.device, &sc_desc);
+        self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Multisampled frame descriptor"),
+            size: wgpu::Extent3d {
+                width: size.width as u32,
+                height: size.height as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 4,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        });
         self.pipeline.size = size;
     }
 

@@ -145,7 +145,7 @@ impl Pipeline {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState {
-                count: 1,
+                count: 4,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
@@ -168,6 +168,7 @@ impl Pipeline {
         encoder: &mut wgpu::CommandEncoder,
         queue: &mut wgpu::Queue,
         view: &wgpu::TextureView,
+        msaa: &wgpu::TextureView,
         geometry: &VertexBuffers<GpuVertex, u16>,
     ) {
         let fill_range = 0..(geometry.indices.len() as u32);
@@ -197,17 +198,9 @@ impl Pipeline {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
-                //color_attachments: &[wgpu::RenderPassColorAttachment {
-                //    view,
-                //    resolve_target: None,
-                //    ops: wgpu::Operations {
-                //        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                //        store: true,
-                //    },
-                //}],
                 color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
+                    view: msaa,
+                    resolve_target: Some(view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: true,

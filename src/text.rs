@@ -6,6 +6,7 @@ use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillVertex, StrokeOptions, StrokeVertex,
 };
 use lyon::tessellation;
+use piet::Color;
 use piet::{
     kurbo::{Point, Size},
     FontFamily, FontStyle, FontWeight, HitTestPoint, HitTestPosition, LineMetric, Text,
@@ -45,7 +46,7 @@ impl WgpuText {
             .borrow()
             .select_best_match(
                 &[font_kit::family_name::FamilyName::Title(
-                    "Cascadia Code".to_string(),
+                    family.name().to_string(),
                 )],
                 &font_kit::properties::Properties::new(),
             )
@@ -102,49 +103,64 @@ impl WgpuTextLayout {
         let affine = ctx.cur_transform.as_coeffs();
         let translate = [affine[4] as f32, affine[5] as f32];
         let mut x = 0.0;
-        for c in self.text.chars() {
+        for (index, c) in self.text.chars().enumerate() {
             let id = font.glyph_id(c);
             let glyph = scaled_font.scaled_glyph(c);
             if let Some(outline) = font.outline(id) {
                 let mut builder = lyon::path::Path::builder();
-                let mut started = false;
+                let mut last = None;
                 for curve in &outline.curves {
-                    match curve {
+                    let start = match curve {
+                        ab_glyph::OutlineCurve::Line(p1, _) => p1,
+                        ab_glyph::OutlineCurve::Quad(p1, _, _) => p1,
+                        ab_glyph::OutlineCurve::Cubic(p1, _, _, _) => p1,
+                    };
+                    if let Some(p) = last.as_ref() {
+                        if p != start {
+                            println!("differnt start {:?} {:?}", p, start);
+                            builder.end(false);
+                            builder.begin(lyon::geom::point(start.x, start.y));
+                        }
+                    } else {
+                        builder.begin(lyon::geom::point(start.x, start.y));
+                    }
+
+                    let end = match curve {
                         ab_glyph::OutlineCurve::Line(p1, p2) => {
-                            if !started {
-                                started = true;
-                                builder.begin(lyon::geom::point(p1.x, p1.y));
-                            }
                             builder.line_to(lyon::geom::point(p2.x, p2.y));
+                            p2
                         }
                         ab_glyph::OutlineCurve::Quad(p1, p2, p3) => {
-                            if !started {
-                                started = true;
-                                builder.begin(lyon::geom::point(p1.x, p1.y));
-                            }
                             builder.quadratic_bezier_to(
                                 lyon::geom::point(p2.x, p2.y),
                                 lyon::geom::point(p3.x, p3.y),
                             );
+                            p3
                         }
                         ab_glyph::OutlineCurve::Cubic(p1, p2, p3, p4) => {
-                            if !started {
-                                started = true;
-                                builder.begin(lyon::geom::point(p1.x, p1.y));
-                            }
                             builder.cubic_bezier_to(
                                 lyon::geom::point(p2.x, p2.y),
                                 lyon::geom::point(p3.x, p3.y),
                                 lyon::geom::point(p4.x, p4.y),
                             );
+                            p4
                         }
-                    }
+                    };
+                    last = Some(end.clone());
                 }
                 builder.close();
                 let path = builder.build();
                 let translate = [
                     translate[0] + pos.x as f32 + x,
                     translate[1] + pos.y as f32 + font_size,
+                ];
+                let color = self.attrs.color(index);
+                let color = color.as_rgba();
+                let color = [
+                    color.0 as f32,
+                    color.1 as f32,
+                    color.2 as f32,
+                    color.3 as f32,
                 ];
                 ctx.fill_tess.tessellate_path(
                     &path,
@@ -153,13 +169,12 @@ impl WgpuTextLayout {
                         pos: vertex.position().to_array(),
                         translate,
                         scale,
-                        color: [0.0, 0.0, 1.0, 1.0],
+                        color,
                         ..Default::default()
                     }),
                 );
             }
             x += scaled_font.h_advance(id);
-            println!("font width {}", scaled_font.h_advance(id));
         }
     }
 }
@@ -277,6 +292,7 @@ impl TextLayout for WgpuTextLayout {
 #[derive(Default)]
 struct Attributes {
     defaults: piet::util::LayoutDefaults,
+    color: Vec<Span<Color>>,
     font: Option<Span<FontFamily>>,
     size: Option<Span<f64>>,
     weight: Option<Span<FontWeight>>,
@@ -304,14 +320,18 @@ impl<T> Span<T> {
 impl Attributes {
     fn add(&mut self, range: Range<usize>, attr: TextAttribute) {
         match attr {
-            TextAttribute::FontFamily(font) => self.font = Some(Span::new(font, range)),
-            TextAttribute::Weight(w) => self.weight = Some(Span::new(w, range)),
-            TextAttribute::FontSize(s) => self.size = Some(Span::new(s, range)),
-            TextAttribute::Style(s) => self.style = Some(Span::new(s, range)),
-            TextAttribute::Strikethrough(_) => { /* Unimplemented for now as coregraphics doesn't have native strikethrough support. */
-            }
-            _ => unreachable!(),
+            TextAttribute::TextColor(color) => self.color.push(Span::new(color, range)),
+            _ => {}
         }
+    }
+
+    fn color(&self, index: usize) -> &Color {
+        for r in &self.color {
+            if r.range.contains(&index) {
+                return &r.payload;
+            }
+        }
+        &self.defaults.fg_color
     }
 
     fn size(&self) -> f64 {
