@@ -19,10 +19,11 @@ unsafe impl bytemuck::Pod for Globals {}
 unsafe impl bytemuck::Zeroable for Globals {}
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug)]
 pub struct GpuVertex {
     pub(crate) pos: [f32; 2],
     pub(crate) translate: [f32; 2],
+    pub(crate) scale: [f32; 2],
     pub(crate) color: [f32; 4],
     pub(crate) normal: [f32; 2],
     pub(crate) width: f32,
@@ -32,6 +33,21 @@ pub struct GpuVertex {
 
 unsafe impl bytemuck::Pod for GpuVertex {}
 unsafe impl bytemuck::Zeroable for GpuVertex {}
+
+impl Default for GpuVertex {
+    fn default() -> Self {
+        Self {
+            pos: [0.0, 0.0],
+            translate: [0.0, 0.0],
+            scale: [1.0, 1.0],
+            color: [0.0, 0.0, 0.0, 0.0],
+            normal: [0.0, 0.0],
+            width: 0.0,
+            blur_rect: [0.0, 0.0, 0.0, 0.0],
+            blur_radius: 0.0,
+        }
+    }
+}
 
 pub struct Pipeline {
     pub pipeline: wgpu::RenderPipeline,
@@ -100,11 +116,12 @@ impl Pipeline {
                     attributes: &wgpu::vertex_attr_array!(
                         0 => Float32x2,
                         1 => Float32x2,
-                        2 => Float32x4,
-                        3 => Float32x2,
-                        4 => Float32,
-                        5 => Float32x4,
-                        6 => Float32,
+                        2 => Float32x2,
+                        3 => Float32x4,
+                        4 => Float32x2,
+                        5 => Float32,
+                        6 => Float32x4,
+                        7 => Float32,
                     ),
                 }],
             },

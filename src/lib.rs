@@ -1,10 +1,12 @@
 mod context;
+mod font;
 mod layer;
 mod pipeline;
 mod quad;
 mod text;
 mod transformation;
 
+use font::FontSource;
 pub use piet::kurbo;
 use piet::kurbo::Size;
 pub use piet::*;
@@ -35,6 +37,9 @@ pub struct WgpuRenderer {
     staging_belt: wgpu::util::StagingBelt,
     local_pool: futures::executor::LocalPool,
 
+    font: FontSource,
+    text: WgpuText,
+
     quad_pipeline: quad::Pipeline,
     pipeline: pipeline::Pipeline,
 }
@@ -64,11 +69,16 @@ impl WgpuRenderer {
         let quad_pipeline = quad::Pipeline::new(&device);
         let pipeline = pipeline::Pipeline::new(&device);
 
+        let font = FontSource::new();
+        font.load(&FontFamily::SYSTEM_UI);
+
         Ok(Self {
             instance,
             device,
             queue,
             surface,
+            font,
+            text: WgpuText::new(),
             format,
             staging_belt,
             local_pool,

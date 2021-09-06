@@ -20,12 +20,12 @@ use piet::{
 
 pub struct WgpuRenderContext<'a> {
     renderer: &'a mut WgpuRenderer,
-    fill_tess: FillTessellator,
-    stroke_tess: StrokeTessellator,
-    geometry: VertexBuffers<GpuVertex, u16>,
+    pub(crate) fill_tess: FillTessellator,
+    pub(crate) stroke_tess: StrokeTessellator,
+    pub(crate) geometry: VertexBuffers<GpuVertex, u16>,
     elements: Vec<Element>,
     inner_text: WgpuText,
-    cur_transform: Affine,
+    pub(crate) cur_transform: Affine,
     state_stack: Vec<State>,
     clip_stack: Vec<Rect>,
 }
@@ -47,8 +47,6 @@ enum Element {
 
 impl<'a> WgpuRenderContext<'a> {
     pub fn new(renderer: &'a mut WgpuRenderer) -> Self {
-        println!("create wgpu render context");
-
         let geometry: VertexBuffers<GpuVertex, u16> = VertexBuffers::new();
         Self {
             renderer,
@@ -271,7 +269,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         //     }
         // }
 
-        println!("piant finish");
         // self.renderer.staging_belt.finish();
         self.renderer.queue.submit(Some(encoder.finish()));
         // self.renderer
@@ -357,6 +354,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 pos: vertex.position().to_array(),
                 translate,
                 color,
+                scale: [1.0, 1.0],
                 normal: [0.0, 0.0],
                 width: 0.0,
                 blur_radius: blur_radius as f32,

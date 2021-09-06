@@ -9,11 +9,12 @@ struct Globals {
 struct VertexInput {
     [[location(0)]] v_pos: vec2<f32>;
     [[location(1)]] v_translate: vec2<f32>;
-    [[location(2)]] v_color: vec4<f32>;
-    [[location(3)]] v_normal: vec2<f32>;
-    [[location(4)]] v_width: f32;
-    [[location(5)]] v_rect: vec4<f32>;
-    [[location(6)]] v_blur_radius: f32;
+    [[location(2)]] v_scale: vec2<f32>;
+    [[location(3)]] v_color: vec4<f32>;
+    [[location(4)]] v_normal: vec2<f32>;
+    [[location(5)]] v_width: f32;
+    [[location(6)]] v_rect: vec4<f32>;
+    [[location(7)]] v_blur_radius: f32;
 };
 
 struct VertexOutput {
@@ -30,10 +31,10 @@ fn main(input: VertexInput) -> VertexOutput {
     
     var invert_y: vec2<f32> = vec2<f32>(1.0, -1.0);
     
-    var translated_pos: vec2<f32> = (input.v_pos + input.v_translate) * globals.u_scale;
+    var translated_pos: vec2<f32> = (input.v_pos * input.v_scale + input.v_translate) * globals.u_scale;
     
     if (input.v_width > 0.0) {
-        translated_pos = (input.v_pos + input.v_translate + input.v_normal / 2.0 * input.v_width) * globals.u_scale;
+        translated_pos = (input.v_pos * input.v_scale + input.v_translate + input.v_normal / 2.0 * input.v_width) * globals.u_scale;
     }
     
     var pos: vec2<f32> = (translated_pos / globals.u_resolution * 2.0 - vec2<f32>(1.0, 1.0)) * invert_y;
@@ -41,14 +42,6 @@ fn main(input: VertexInput) -> VertexOutput {
     out.position = vec4<f32>(pos, 0.0, 1.0);
     out.color = input.v_color;
     out.blur_radius = input.v_blur_radius;
-    
-    if (out.blur_radius > 0.0) {
-        out.rect.x = (input.v_rect.x + input.v_translate.x) * globals.u_scale / globals.u_resolution.x * 2.0 - 1.0;
-        out.rect.y = ((input.v_rect.y + input.v_translate.y) * globals.u_scale / globals.u_resolution.y * 2.0 - 1.0) * -1.0;
-        out.rect.z = (input.v_rect.z + input.v_translate.x) * globals.u_scale / globals.u_resolution.x * 2.0 - 1.0;
-        out.rect.w = ((input.v_rect.w + input.v_translate.y) * globals.u_scale / globals.u_resolution.y * 2.0 - 1.0) * -1.0;;
-    }
-    
     out.rect = input.v_rect;
     out.pos = input.v_pos;
     
