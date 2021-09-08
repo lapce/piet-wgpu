@@ -8,13 +8,14 @@ struct Globals {
     
 struct VertexInput {
     [[location(0)]] v_pos: vec2<f32>;
-    [[location(1)]] v_translate: vec2<f32>;
-    [[location(2)]] v_scale: vec2<f32>;
-    [[location(3)]] v_color: vec4<f32>;
-    [[location(4)]] v_normal: vec2<f32>;
-    [[location(5)]] v_width: f32;
-    [[location(6)]] v_rect: vec4<f32>;
-    [[location(7)]] v_blur_radius: f32;
+    [[location(1)]] v_z: f32;
+    [[location(2)]] v_translate: vec2<f32>;
+    [[location(3)]] v_scale: vec2<f32>;
+    [[location(4)]] v_color: vec4<f32>;
+    [[location(5)]] v_normal: vec2<f32>;
+    [[location(6)]] v_width: f32;
+    [[location(7)]] v_rect: vec4<f32>;
+    [[location(8)]] v_blur_radius: f32;
 };
 
 struct VertexOutput {
@@ -39,7 +40,7 @@ fn main(input: VertexInput) -> VertexOutput {
     
     var pos: vec2<f32> = (translated_pos / globals.u_resolution * 2.0 - vec2<f32>(1.0, 1.0)) * invert_y;
     
-    out.position = vec4<f32>(pos, 0.0, 1.0);
+    out.position = vec4<f32>(pos, input.v_z, 1.0);
     out.color = input.v_color;
     out.blur_radius = input.v_blur_radius;
     out.rect = input.v_rect;

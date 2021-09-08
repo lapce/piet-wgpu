@@ -37,6 +37,8 @@ pub struct WgpuRenderer {
     staging_belt: wgpu::util::StagingBelt,
     local_pool: futures::executor::LocalPool,
     texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    size: Size,
 
     font: FontSource,
     text: WgpuText,
@@ -51,7 +53,7 @@ impl WgpuRenderer {
         let surface = unsafe { instance.create_surface(window) };
         let adapter =
             futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
             }))
             .ok_or(piet::Error::NotSupported)?;
@@ -64,11 +66,26 @@ impl WgpuRenderer {
             .get_preferred_format(&adapter)
             .ok_or(piet::Error::NotSupported)?;
 
-        let staging_belt = wgpu::util::StagingBelt::new(10 * 1024);
+        let staging_belt = wgpu::util::StagingBelt::new(1024);
         let local_pool = futures::executor::LocalPool::new();
 
         let quad_pipeline = quad::Pipeline::new(&device);
         let pipeline = pipeline::Pipeline::new(&device);
+
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth buffer"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        });
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Multisampled frame descriptor"),
@@ -85,6 +102,7 @@ impl WgpuRenderer {
         });
 
         let font = FontSource::new();
+        let text = WgpuText::new(&device, 1.0);
 
         Ok(Self {
             instance,
@@ -92,17 +110,20 @@ impl WgpuRenderer {
             queue,
             surface,
             font,
-            text: WgpuText::new(),
+            text,
+            size: Size::ZERO,
             format,
             staging_belt,
             local_pool,
             texture,
+            depth_view,
             quad_pipeline,
             pipeline,
         })
     }
 
     pub fn set_size(&mut self, size: Size) {
+        self.size = size;
         let sc_desc = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8Unorm,
@@ -125,10 +146,30 @@ impl WgpuRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
         self.pipeline.size = size;
+
+        let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth buffer"),
+            size: wgpu::Extent3d {
+                width: size.width as u32,
+                height: size.height as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        });
+        self.depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
 
     pub fn set_scale(&mut self, scale: f64) {
         self.pipeline.scale = scale;
+        self.text.scale = scale;
+    }
+
+    pub fn text(&self) -> WgpuText {
+        self.text.clone()
     }
 }
 

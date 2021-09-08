@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, FillVertexConstructor,
     StrokeVertexConstructor, VertexBuffers,
@@ -22,6 +24,7 @@ unsafe impl bytemuck::Zeroable for Globals {}
 #[derive(Copy, Clone, Debug)]
 pub struct GpuVertex {
     pub(crate) pos: [f32; 2],
+    pub(crate) z: f32,
     pub(crate) translate: [f32; 2],
     pub(crate) scale: [f32; 2],
     pub(crate) color: [f32; 4],
@@ -38,6 +41,7 @@ impl Default for GpuVertex {
     fn default() -> Self {
         Self {
             pos: [0.0, 0.0],
+            z: 0.0,
             translate: [0.0, 0.0],
             scale: [1.0, 1.0],
             color: [0.0, 0.0, 0.0, 0.0],
@@ -115,13 +119,14 @@ impl Pipeline {
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array!(
                         0 => Float32x2,
-                        1 => Float32x2,
+                        1 => Float32,
                         2 => Float32x2,
-                        3 => Float32x4,
-                        4 => Float32x2,
-                        5 => Float32,
-                        6 => Float32x4,
-                        7 => Float32,
+                        3 => Float32x2,
+                        4 => Float32x4,
+                        5 => Float32x2,
+                        6 => Float32,
+                        7 => Float32x4,
+                        8 => Float32,
                     ),
                 }],
             },
@@ -131,6 +136,18 @@ impl Pipeline {
                 targets: &[wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Bgra8Unorm,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // blend: Some(wgpu::BlendState {
+                    //     color: wgpu::BlendComponent {
+                    //         src_factor: wgpu::BlendFactor::SrcAlpha,
+                    //         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    //         operation: wgpu::BlendOperation::Add,
+                    //     },
+                    //     alpha: wgpu::BlendComponent {
+                    //         src_factor: wgpu::BlendFactor::One,
+                    //         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    //         operation: wgpu::BlendOperation::Add,
+                    //     },
+                    // }),
                     write_mask: wgpu::ColorWrites::ALL,
                 }],
             }),
@@ -143,9 +160,15 @@ impl Pipeline {
                 clamp_depth: false,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::GreaterEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
-                count: 4,
+                count: 1,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
@@ -165,11 +188,12 @@ impl Pipeline {
     pub fn draw(
         &mut self,
         device: &wgpu::Device,
+        staging_belt: &mut wgpu::util::StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &mut wgpu::Queue,
         view: &wgpu::TextureView,
         msaa: &wgpu::TextureView,
-        geometry: &VertexBuffers<GpuVertex, u16>,
+        depth_stencil_attachment: wgpu::RenderPassDepthStencilAttachment,
+        geometry: &VertexBuffers<GpuVertex, u32>,
     ) {
         let fill_range = 0..(geometry.indices.len() as u32);
 
@@ -185,34 +209,41 @@ impl Pipeline {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        queue.write_buffer(
-            &self.globals,
-            0,
-            bytemuck::cast_slice(&[Globals {
+        {
+            let globals = vec![Globals {
                 resolution: [self.size.width as f32, self.size.height as f32],
                 scale: self.scale as f32,
                 _pad: 0.0,
-            }]),
-        );
+            }];
+            let global_bytes = bytemuck::cast_slice(&globals);
+            let mut globals = staging_belt.write_buffer(
+                encoder,
+                &self.globals,
+                0,
+                unsafe { NonZeroU64::new_unchecked(global_bytes.len() as u64) },
+                device,
+            );
+            globals.copy_from_slice(global_bytes);
+        }
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: msaa,
-                    resolve_target: Some(view),
+                    view: view,
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: true,
                     },
                 }],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(depth_stencil_attachment),
             });
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_vertex_buffer(0, vbo.slice(..));
-            pass.set_index_buffer(ibo.slice(..), wgpu::IndexFormat::Uint16);
+            pass.set_index_buffer(ibo.slice(..), wgpu::IndexFormat::Uint32);
 
             pass.draw_indexed(fill_range.clone(), 0, 0..1);
         }

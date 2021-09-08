@@ -1,9 +1,10 @@
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
-use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
+use ab_glyph::{Font, FontArc, FontVec, PxScale, ScaleFont};
+use font_kit::family_name::FamilyName;
 use font_kit::source::SystemSource;
 use lyon::lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillVertex, StrokeOptions, StrokeVertex,
+    BuffersBuilder, FillOptions, FillVertex, StrokeOptions, StrokeVertex, VertexBuffers,
 };
 use lyon::tessellation;
 use piet::Color;
@@ -12,56 +13,170 @@ use piet::{
     FontFamily, FontStyle, FontWeight, HitTestPoint, HitTestPosition, LineMetric, Text,
     TextAttribute, TextLayout, TextLayoutBuilder, TextStorage,
 };
+use wgpu_glyph::{FontId, GlyphBrush, GlyphBrushBuilder, Section};
 
+use crate::context::WgpuRenderContext;
 use crate::pipeline::GpuVertex;
-use crate::{context::WgpuRenderContext, font::FontSource};
 
 #[derive(Clone)]
 pub struct WgpuText {
     source: Rc<RefCell<SystemSource>>,
-    fonts: Rc<RefCell<HashMap<FontFamily, Rc<ab_glyph::FontVec>>>>,
+    fonts: Rc<RefCell<HashMap<FontFamily, (Rc<ab_glyph::FontArc>, FontId)>>>,
+    glyphs: Rc<RefCell<HashMap<FontFamily, HashMap<char, Rc<(Vec<[f32; 2]>, Vec<u32>)>>>>>,
+    pub(crate) glyph_brush: Rc<RefCell<GlyphBrush<wgpu::DepthStencilState>>>,
+    pub(crate) scale: f64,
 }
 
 impl WgpuText {
-    pub fn new() -> Self {
+    pub(crate) fn new(device: &wgpu::Device, scale: f64) -> Self {
         Self {
             source: Rc::new(RefCell::new(SystemSource::new())),
             fonts: Rc::new(RefCell::new(HashMap::new())),
+            glyphs: Rc::new(RefCell::new(HashMap::new())),
+            glyph_brush: Rc::new(RefCell::new(
+                GlyphBrushBuilder::using_fonts(vec![])
+                    .depth_stencil_state(wgpu::DepthStencilState {
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: true,
+                        depth_compare: wgpu::CompareFunction::GreaterEqual,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    })
+                    .build(device, wgpu::TextureFormat::Bgra8Unorm),
+            )),
+            scale,
         }
     }
 
-    fn get_font(&self, family: &FontFamily) -> Result<Rc<FontVec>, piet::Error> {
+    fn glyph_vertices(
+        &self,
+        renderer: &mut WgpuRenderContext,
+        family: &FontFamily,
+        c: char,
+    ) -> Result<Rc<(Vec<[f32; 2]>, Vec<u32>)>, piet::Error> {
+        if !self.glyphs.borrow().contains_key(family) {
+            self.glyphs
+                .borrow_mut()
+                .insert(family.clone(), HashMap::new());
+        }
+
+        let mut glyphs = self.glyphs.borrow_mut();
+        let font_glyphs = glyphs.get_mut(family).unwrap();
+
+        if !font_glyphs.contains_key(&c) {
+            let (font, font_id) = self.get_font(family)?;
+            let id = font.glyph_id(c);
+            let outline = font.outline(id).ok_or(piet::Error::NotSupported)?;
+            let mut builder = lyon::path::Path::builder();
+            let mut last = None;
+            for curve in &outline.curves {
+                let start = match curve {
+                    ab_glyph::OutlineCurve::Line(p1, _) => p1,
+                    ab_glyph::OutlineCurve::Quad(p1, _, _) => p1,
+                    ab_glyph::OutlineCurve::Cubic(p1, _, _, _) => p1,
+                };
+                if let Some(p) = last.as_ref() {
+                    if p != start {
+                        builder.end(false);
+                        builder.begin(lyon::geom::point(start.x, start.y));
+                    }
+                } else {
+                    builder.begin(lyon::geom::point(start.x, start.y));
+                }
+
+                let end = match curve {
+                    ab_glyph::OutlineCurve::Line(p1, p2) => {
+                        builder.line_to(lyon::geom::point(p2.x, p2.y));
+                        p2
+                    }
+                    ab_glyph::OutlineCurve::Quad(p1, p2, p3) => {
+                        builder.quadratic_bezier_to(
+                            lyon::geom::point(p2.x, p2.y),
+                            lyon::geom::point(p3.x, p3.y),
+                        );
+                        p3
+                    }
+                    ab_glyph::OutlineCurve::Cubic(p1, p2, p3, p4) => {
+                        builder.cubic_bezier_to(
+                            lyon::geom::point(p2.x, p2.y),
+                            lyon::geom::point(p3.x, p3.y),
+                            lyon::geom::point(p4.x, p4.y),
+                        );
+                        p4
+                    }
+                };
+                last = Some(end.clone());
+            }
+            builder.close();
+            let path = builder.build();
+
+            let mut geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
+            renderer
+                .fill_tess
+                .tessellate_path(
+                    &path,
+                    &FillOptions::tolerance(0.1).with_fill_rule(tessellation::FillRule::NonZero),
+                    &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| GpuVertex {
+                        pos: vertex.position().to_array(),
+                        ..Default::default()
+                    }),
+                )
+                .map_err(|e| piet::Error::NotSupported)?;
+            println!("{} {}", geometry.vertices.len(), geometry.indices.len());
+            font_glyphs.insert(
+                c,
+                Rc::new((
+                    geometry.vertices.iter().map(|v| v.pos).collect(),
+                    geometry.indices,
+                )),
+            );
+        }
+
+        Ok(font_glyphs.get(&c).unwrap().clone())
+    }
+
+    fn get_font(&self, family: &FontFamily) -> Result<(Rc<FontArc>, FontId), piet::Error> {
         if !self.fonts.borrow().contains_key(family) {
             let font = self.get_new_font(family)?;
+            let font_id = self.glyph_brush.borrow_mut().add_font(font.clone());
             self.fonts
                 .borrow_mut()
-                .insert(family.clone(), Rc::new(font));
+                .insert(family.clone(), (Rc::new(font), font_id));
         }
         Ok(self.fonts.borrow().get(family).unwrap().clone())
     }
 
-    fn get_new_font(&self, family: &FontFamily) -> Result<ab_glyph::FontVec, piet::Error> {
+    fn get_new_font(&self, family: &FontFamily) -> Result<ab_glyph::FontArc, piet::Error> {
+        let family_name = match family.inner() {
+            piet::FontFamilyInner::Serif => FamilyName::Serif,
+            piet::FontFamilyInner::SansSerif => FamilyName::SansSerif,
+            piet::FontFamilyInner::Monospace => FamilyName::Monospace,
+            piet::FontFamilyInner::SystemUi => FamilyName::SansSerif,
+            piet::FontFamilyInner::Named(name) => {
+                font_kit::family_name::FamilyName::Title(name.to_string())
+            }
+            _ => FamilyName::SansSerif,
+        };
         let handle = self
             .source
             .borrow()
             .select_best_match(
-                &[font_kit::family_name::FamilyName::Title(
-                    family.name().to_string(),
-                )],
-                &font_kit::properties::Properties::new(),
+                &[family_name],
+                &font_kit::properties::Properties::new()
+                    .weight(font_kit::properties::Weight::MEDIUM),
             )
             .map_err(|e| piet::Error::NotSupported)?;
         let font = match handle {
             font_kit::handle::Handle::Path { path, font_index } => {
                 let content =
                     std::fs::read_to_string(path).map_err(|e| piet::Error::NotSupported)?;
-                let font = FontVec::try_from_vec(content.into_bytes())
+                let font = FontArc::try_from_vec(content.into_bytes())
                     .map_err(|e| piet::Error::NotSupported)?;
                 font
             }
             font_kit::handle::Handle::Memory { bytes, font_index } => {
                 let font =
-                    FontVec::try_from_vec(bytes.to_vec()).map_err(|e| piet::Error::NotSupported)?;
+                    FontArc::try_from_vec(bytes.to_vec()).map_err(|e| piet::Error::NotSupported)?;
                 font
             }
         };
@@ -89,13 +204,42 @@ impl WgpuTextLayout {
         self.attrs = Rc::new(attrs);
     }
 
-    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, pos: Point) {
-        let font = self
-            .state
-            .get_font(&FontFamily::new_unchecked("Cascadia Code".to_string()))
-            .unwrap();
+    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, pos: Point, z: f32) {
+        let font_family = &self.attrs.defaults.font;
+        if let Ok((font, font_id)) = self.state.get_font(font_family) {
+            let units_per_em = font.units_per_em().unwrap();
+            let font_size = self.attrs.defaults.font_size as f32;
+            let font_scale = font_size * (font.height_unscaled() / units_per_em);
+            let color = &self.attrs.defaults.fg_color;
+            let color = color.as_rgba();
+            let color = [
+                color.0 as f32,
+                color.1 as f32,
+                color.2 as f32,
+                color.3 as f32,
+            ];
+            let affine = ctx.cur_transform.as_coeffs();
+            let translate = [affine[4], affine[5]];
+            let mut brush = self.state.glyph_brush.borrow_mut();
+            brush.queue(Section {
+                screen_position: (
+                    ((translate[0] + pos.x) * self.state.scale) as f32,
+                    ((translate[1] + pos.y) * self.state.scale) as f32,
+                ),
+                text: vec![wgpu_glyph::Text::new(self.text.as_ref())
+                    .with_color(color)
+                    .with_scale(font_scale * self.state.scale as f32)
+                    .with_font_id(font_id)
+                    .with_z(z)],
+                ..Default::default()
+            });
+        }
+
+        return;
+        let font_family = &self.attrs.defaults.font;
+        let (font, font_id) = self.state.get_font(font_family).unwrap();
         let units_per_em = font.units_per_em().unwrap();
-        let font_size = 13.0;
+        let font_size = self.attrs.defaults.font_size as f32;
         let font_scale = font_size * (font.height_unscaled() / units_per_em);
         let scaled_font = font.as_scaled(font_size * (font.height_unscaled() / units_per_em));
         let scale = font_scale / font.height_unscaled();
@@ -104,76 +248,118 @@ impl WgpuTextLayout {
         let translate = [affine[4] as f32, affine[5] as f32];
         let mut x = 0.0;
         for (index, c) in self.text.chars().enumerate() {
-            let id = font.glyph_id(c);
-            let glyph = scaled_font.scaled_glyph(c);
-            if let Some(outline) = font.outline(id) {
-                let mut builder = lyon::path::Path::builder();
-                let mut last = None;
-                for curve in &outline.curves {
-                    let start = match curve {
-                        ab_glyph::OutlineCurve::Line(p1, _) => p1,
-                        ab_glyph::OutlineCurve::Quad(p1, _, _) => p1,
-                        ab_glyph::OutlineCurve::Cubic(p1, _, _, _) => p1,
-                    };
-                    if let Some(p) = last.as_ref() {
-                        if p != start {
-                            println!("differnt start {:?} {:?}", p, start);
-                            builder.end(false);
-                            builder.begin(lyon::geom::point(start.x, start.y));
-                        }
-                    } else {
-                        builder.begin(lyon::geom::point(start.x, start.y));
-                    }
-
-                    let end = match curve {
-                        ab_glyph::OutlineCurve::Line(p1, p2) => {
-                            builder.line_to(lyon::geom::point(p2.x, p2.y));
-                            p2
-                        }
-                        ab_glyph::OutlineCurve::Quad(p1, p2, p3) => {
-                            builder.quadratic_bezier_to(
-                                lyon::geom::point(p2.x, p2.y),
-                                lyon::geom::point(p3.x, p3.y),
-                            );
-                            p3
-                        }
-                        ab_glyph::OutlineCurve::Cubic(p1, p2, p3, p4) => {
-                            builder.cubic_bezier_to(
-                                lyon::geom::point(p2.x, p2.y),
-                                lyon::geom::point(p3.x, p3.y),
-                                lyon::geom::point(p4.x, p4.y),
-                            );
-                            p4
-                        }
-                    };
-                    last = Some(end.clone());
-                }
-                builder.close();
-                let path = builder.build();
-                let translate = [
-                    translate[0] + pos.x as f32 + x,
-                    translate[1] + pos.y as f32 + font_size,
-                ];
-                let color = self.attrs.color(index);
-                let color = color.as_rgba();
-                let color = [
-                    color.0 as f32,
-                    color.1 as f32,
-                    color.2 as f32,
-                    color.3 as f32,
-                ];
-                ctx.fill_tess.tessellate_path(
-                    &path,
-                    &FillOptions::tolerance(1.0).with_fill_rule(tessellation::FillRule::NonZero),
-                    &mut BuffersBuilder::new(&mut ctx.geometry, |vertex: FillVertex| GpuVertex {
-                        pos: vertex.position().to_array(),
+            let translate = [
+                translate[0] + pos.x as f32 + x,
+                translate[1] + pos.y as f32 + font_size,
+            ];
+            let color = self.attrs.color(index);
+            let color = color.as_rgba();
+            let color = [
+                color.0 as f32,
+                color.1 as f32,
+                color.2 as f32,
+                color.3 as f32,
+            ];
+            if let Ok(result) = self.state.glyph_vertices(ctx, font_family, c) {
+                let mut vertices: Vec<GpuVertex> = result
+                    .0
+                    .iter()
+                    .map(|pos| GpuVertex {
+                        pos: *pos,
                         translate,
                         scale,
                         color,
                         ..Default::default()
-                    }),
-                );
+                    })
+                    .collect();
+                let offset = ctx.geometry.vertices.len() as u32;
+                ctx.geometry
+                    .indices
+                    .append(&mut result.1.iter().map(|i| i + offset).collect());
+                ctx.geometry.vertices.append(&mut vertices);
             }
+            let id = font.glyph_id(c);
+            //let glyph = scaled_font.scaled_glyph(c);
+            //if let Some(outline) = font.outline(id) {
+            //    let mut builder = lyon::path::Path::builder();
+            //    let mut last = None;
+            //    for curve in &outline.curves {
+            //        let start = match curve {
+            //            ab_glyph::OutlineCurve::Line(p1, _) => p1,
+            //            ab_glyph::OutlineCurve::Quad(p1, _, _) => p1,
+            //            ab_glyph::OutlineCurve::Cubic(p1, _, _, _) => p1,
+            //        };
+            //        if let Some(p) = last.as_ref() {
+            //            if p != start {
+            //                builder.end(false);
+            //                builder.begin(lyon::geom::point(start.x, start.y));
+            //            }
+            //        } else {
+            //            builder.begin(lyon::geom::point(start.x, start.y));
+            //        }
+
+            //        let end = match curve {
+            //            ab_glyph::OutlineCurve::Line(p1, p2) => {
+            //                builder.line_to(lyon::geom::point(p2.x, p2.y));
+            //                p2
+            //            }
+            //            ab_glyph::OutlineCurve::Quad(p1, p2, p3) => {
+            //                builder.quadratic_bezier_to(
+            //                    lyon::geom::point(p2.x, p2.y),
+            //                    lyon::geom::point(p3.x, p3.y),
+            //                );
+            //                p3
+            //            }
+            //            ab_glyph::OutlineCurve::Cubic(p1, p2, p3, p4) => {
+            //                builder.cubic_bezier_to(
+            //                    lyon::geom::point(p2.x, p2.y),
+            //                    lyon::geom::point(p3.x, p3.y),
+            //                    lyon::geom::point(p4.x, p4.y),
+            //                );
+            //                p4
+            //            }
+            //        };
+            //        last = Some(end.clone());
+            //    }
+            //    builder.close();
+            //    let path = builder.build();
+            //    let translate = [
+            //        translate[0] + pos.x as f32 + x,
+            //        translate[1] + pos.y as f32 + font_size,
+            //    ];
+            //    let color = self.attrs.color(index);
+            //    let color = color.as_rgba();
+            //    let color = [
+            //        color.0 as f32,
+            //        color.1 as f32,
+            //        color.2 as f32,
+            //        color.3 as f32,
+            //    ];
+            //    ctx.fill_tess.tessellate_path(
+            //        &path,
+            //        &FillOptions::tolerance(0.1).with_fill_rule(tessellation::FillRule::NonZero),
+            //        &mut BuffersBuilder::new(&mut ctx.geometry, |vertex: FillVertex| GpuVertex {
+            //            pos: vertex.position().to_array(),
+            //            translate,
+            //            scale,
+            //            color,
+            //            ..Default::default()
+            //        }),
+            //    );
+            //    ctx.stroke_tess.tessellate_path(
+            //        &path,
+            //        &StrokeOptions::tolerance(0.1),
+            //        &mut BuffersBuilder::new(&mut ctx.geometry, |vertex: StrokeVertex| GpuVertex {
+            //            pos: vertex.position().to_array(),
+            //            translate,
+            //            scale,
+            //            color,
+            //            normal: vertex.normal().to_array(),
+            //            width: 0.2,
+            //            ..Default::default()
+            //        }),
+            //    );
+            //}
             x += scaled_font.h_advance(id);
         }
     }
@@ -273,7 +459,7 @@ impl TextLayout for WgpuTextLayout {
     }
 
     fn line_metric(&self, line_number: usize) -> Option<LineMetric> {
-        None
+        Some(LineMetric::default())
     }
 
     fn line_count(&self) -> usize {
