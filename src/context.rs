@@ -2,9 +2,7 @@ use std::borrow::Cow;
 
 use crate::{
     pipeline::GpuVertex,
-    quad::Quad,
     text::{WgpuText, WgpuTextLayout},
-    text_pipeline::Instance,
     transformation::Transformation,
     WgpuRenderer,
 };
@@ -41,9 +39,6 @@ pub struct WgpuRenderContext<'a> {
     elements: Vec<Element>,
     inner_text: WgpuText,
     pub(crate) cur_transform: Affine,
-    pub(crate) cur_depth: f32,
-    depth_step: f32,
-    pending_text: bool,
     state_stack: Vec<State>,
     clip_stack: Vec<Rect>,
 }
@@ -132,9 +127,6 @@ impl<'a> WgpuRenderContext<'a> {
             cur_transform: Affine::default(),
             state_stack: Vec::new(),
             clip_stack: Vec::new(),
-            cur_depth: 0.0,
-            depth_step: 0.0001,
-            pending_text: false,
         }
     }
 
@@ -144,60 +136,6 @@ impl<'a> WgpuRenderContext<'a> {
 
     pub(crate) fn current_clip(&self) -> Option<&Rect> {
         self.clip_stack.last()
-    }
-
-    pub(crate) fn render(&mut self) {
-        // self.render_text();
-        // self.render_shapes();
-    }
-
-    pub(crate) fn render_shapes(&mut self) {
-        if self.geometry.vertices.len() > 0 && self.geometry.indices.len() > 0 {
-            self.renderer.pipeline.draw(
-                &self.renderer.device,
-                &mut self.renderer.staging_belt,
-                &mut self.encoder.as_mut().unwrap(),
-                &self.view,
-                &self.msaa,
-                wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.renderer.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: true,
-                    }),
-                    stencil_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: true,
-                    }),
-                },
-                &self.geometry,
-            );
-            self.geometry.vertices.clear();
-            self.geometry.indices.clear();
-        }
-    }
-
-    pub(crate) fn render_text(&mut self) {
-        //let affine = self.cur_transform.as_coeffs();
-        //let translate = [affine[4] as f32, affine[5] as f32];
-        self.renderer.text_pipeline.draw(
-            &self.renderer.device,
-            &mut self.renderer.staging_belt,
-            &mut self.encoder.as_mut().unwrap(),
-            &self.view,
-            wgpu::RenderPassDepthStencilAttachment {
-                view: &self.renderer.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-                stencil_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-            },
-            [0.0, 0.0],
-        );
     }
 }
 
@@ -243,7 +181,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         ];
         let affine = self.cur_transform.as_coeffs();
         let translate = [affine[4] as f32, affine[5] as f32];
-        let z = self.cur_depth;
 
         if let Some(rect) = shape.as_rect() {
             self.stroke_tess.tessellate_rectangle(
@@ -254,7 +191,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 &StrokeOptions::tolerance(0.02).with_line_width(width as f32),
                 &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| GpuVertex {
                     pos: vertex.position().to_array(),
-                    z,
                     translate,
                     color,
                     normal: vertex.normal().to_array(),
@@ -274,7 +210,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| GpuVertex {
                     pos: vertex.position_on_path().to_array(),
                     translate,
-                    z,
                     color,
                     normal: vertex.normal().to_array(),
                     width: width as f32,
@@ -306,7 +241,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             ];
             let affine = self.cur_transform.as_coeffs();
             let translate = [affine[4] as f32, affine[5] as f32];
-            let z = self.cur_depth;
             self.fill_tess.tessellate_rectangle(
                 &lyon::geom::Rect::new(
                     lyon::geom::Point::new(rect.x0 as f32, rect.y0 as f32),
@@ -315,7 +249,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 &FillOptions::tolerance(0.02).with_fill_rule(tessellation::FillRule::NonZero),
                 &mut BuffersBuilder::new(&mut self.geometry, |vertex: FillVertex| GpuVertex {
                     pos: vertex.position().to_array(),
-                    z,
                     translate,
                     color,
                     ..Default::default()
@@ -354,7 +287,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn save(&mut self) -> Result<(), piet::Error> {
-        self.cur_depth += self.depth_step;
         self.state_stack.push(State {
             rel_transform: Affine::default(),
             transform: self.cur_transform,
@@ -398,8 +330,9 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         );
 
         self.renderer.staging_belt.finish();
-        let commond_buffer = self.encoder.take().unwrap().finish();
-        self.renderer.queue.submit(Some(commond_buffer));
+        self.renderer
+            .queue
+            .submit(Some(self.encoder.take().unwrap().finish()));
 
         self.renderer
             .local_pool
@@ -473,7 +406,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         ];
         let affine = self.cur_transform.as_coeffs();
         let translate = [affine[4] as f32, affine[5] as f32];
-        let z = self.cur_depth;
         self.fill_tess.tessellate_rectangle(
             &lyon::geom::Rect::new(
                 lyon::geom::Point::new(rect.x0 as f32, rect.y0 as f32),
@@ -482,7 +414,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             &FillOptions::tolerance(0.02).with_fill_rule(tessellation::FillRule::NonZero),
             &mut BuffersBuilder::new(&mut self.geometry, |vertex: FillVertex| GpuVertex {
                 pos: vertex.position().to_array(),
-                z,
                 translate,
                 color,
                 blur_radius: blur_radius as f32,
