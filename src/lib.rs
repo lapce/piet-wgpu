@@ -4,6 +4,7 @@ mod layer;
 mod pipeline;
 mod quad;
 mod text;
+mod text_pipeline;
 mod transformation;
 
 use font::FontSource;
@@ -45,6 +46,7 @@ pub struct WgpuRenderer {
 
     quad_pipeline: quad::Pipeline,
     pipeline: pipeline::Pipeline,
+    text_pipeline: text_pipeline::Pipeline,
 }
 
 impl WgpuRenderer {
@@ -101,6 +103,8 @@ impl WgpuRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
 
+        let text_pipeline = text_pipeline::Pipeline::new(&device);
+
         let font = FontSource::new();
         let text = WgpuText::new(&device, 1.0);
 
@@ -119,6 +123,7 @@ impl WgpuRenderer {
             depth_view,
             quad_pipeline,
             pipeline,
+            text_pipeline,
         })
     }
 
@@ -146,6 +151,7 @@ impl WgpuRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
         self.pipeline.size = size;
+        self.text_pipeline.size = size;
 
         let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth buffer"),
@@ -166,6 +172,7 @@ impl WgpuRenderer {
     pub fn set_scale(&mut self, scale: f64) {
         self.pipeline.scale = scale;
         self.text.scale = scale;
+        self.text_pipeline.cache.scale = scale;
     }
 
     pub fn text(&self) -> WgpuText {

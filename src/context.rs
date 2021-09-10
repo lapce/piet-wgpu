@@ -4,8 +4,15 @@ use crate::{
     pipeline::GpuVertex,
     quad::Quad,
     text::{WgpuText, WgpuTextLayout},
+    text_pipeline::Instance,
     transformation::Transformation,
     WgpuRenderer,
+};
+use font_kit::{
+    canvas::{Canvas, Format, RasterizationOptions},
+    family_name::FamilyName,
+    hinting::HintingOptions,
+    source::SystemSource,
 };
 use futures::task::SpawnExt;
 use lyon::lyon_tessellation::{
@@ -13,13 +20,21 @@ use lyon::lyon_tessellation::{
     StrokeVertex, VertexBuffers,
 };
 use lyon::tessellation;
+use pathfinder_geometry::{
+    transform2d::Transform2F,
+    vector::{Vector2F, Vector2I},
+};
 use piet::{
-    kurbo::{Affine, Point, Rect, Shape, Size},
-    Color, Image, IntoBrush, RenderContext,
+    kurbo::{Affine, Point, Rect, Shape, Size, Vec2},
+    Color, FontFamily, Image, IntoBrush, RenderContext,
 };
 
 pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
+    view: wgpu::TextureView,
+    frame: wgpu::SurfaceFrame,
+    pub(crate) encoder: Option<wgpu::CommandEncoder>,
+    msaa: wgpu::TextureView,
     pub(crate) fill_tess: FillTessellator,
     pub(crate) stroke_tess: StrokeTessellator,
     pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
@@ -28,6 +43,7 @@ pub struct WgpuRenderContext<'a> {
     pub(crate) cur_transform: Affine,
     pub(crate) cur_depth: f32,
     depth_step: f32,
+    pending_text: bool,
     state_stack: Vec<State>,
     clip_stack: Vec<Rect>,
 }
@@ -51,8 +67,63 @@ impl<'a> WgpuRenderContext<'a> {
     pub fn new(renderer: &'a mut WgpuRenderer) -> Self {
         let text = renderer.text();
         let geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
+        let frame = renderer.surface.get_current_frame().unwrap();
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render"),
+            });
+        let view = frame
+            .output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Multisampled frame descriptor"),
+            size: wgpu::Extent3d {
+                width: renderer.pipeline.size.width as u32,
+                height: renderer.pipeline.size.height as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 4,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        });
+        let msaa = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        {
+            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        store: true,
+                    },
+                }],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &renderer.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(-1.0),
+                        store: true,
+                    }),
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0),
+                        store: true,
+                    }),
+                }),
+            });
+        }
+
         Self {
             renderer,
+            view,
+            frame,
+            encoder: Some(encoder),
+            msaa,
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
             geometry,
@@ -63,11 +134,70 @@ impl<'a> WgpuRenderContext<'a> {
             clip_stack: Vec::new(),
             cur_depth: 0.0,
             depth_step: 0.0001,
+            pending_text: false,
         }
     }
 
     pub fn pop_clip(&mut self) {
         self.clip_stack.pop();
+    }
+
+    pub(crate) fn current_clip(&self) -> Option<&Rect> {
+        self.clip_stack.last()
+    }
+
+    pub(crate) fn render(&mut self) {
+        self.render_shapes();
+        self.render_text();
+    }
+
+    pub(crate) fn render_shapes(&mut self) {
+        if self.geometry.vertices.len() > 0 && self.geometry.indices.len() > 0 {
+            self.renderer.pipeline.draw(
+                &self.renderer.device,
+                &mut self.renderer.staging_belt,
+                &mut self.encoder.as_mut().unwrap(),
+                &self.view,
+                &self.msaa,
+                wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.renderer.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    }),
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    }),
+                },
+                &self.geometry,
+            );
+            self.geometry.vertices.clear();
+            self.geometry.indices.clear();
+        }
+    }
+
+    pub(crate) fn render_text(&mut self) {
+        let affine = self.cur_transform.as_coeffs();
+        let translate = [affine[4] as f32, affine[5] as f32];
+        self.renderer.text_pipeline.draw(
+            &self.renderer.device,
+            &mut self.renderer.staging_belt,
+            &mut self.encoder.as_mut().unwrap(),
+            &self.view,
+            wgpu::RenderPassDepthStencilAttachment {
+                view: &self.renderer.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                }),
+                stencil_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                }),
+            },
+            translate,
+        );
     }
 }
 
@@ -203,6 +333,8 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
 
     fn clip(&mut self, shape: impl Shape) {
         if let Some(rect) = shape.as_rect() {
+            let affine = self.cur_transform.as_coeffs();
+            let rect = rect + Vec2::new(affine[4], affine[5]);
             self.clip_stack.push(rect);
             if let Some(state) = self.state_stack.last_mut() {
                 state.n_clip += 1;
@@ -215,7 +347,8 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<piet::kurbo::Point>) {
-        layout.draw_text(self, pos.into(), self.cur_depth + self.depth_step * 0.1);
+        layout.draw_text(self, pos.into(), self.cur_depth);
+        self.pending_text = true;
     }
 
     fn save(&mut self) -> Result<(), piet::Error> {
@@ -229,6 +362,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn restore(&mut self) -> Result<(), piet::Error> {
+        self.render();
         if let Some(state) = self.state_stack.pop() {
             self.cur_transform = state.transform;
             for _ in 0..state.n_clip {
@@ -241,107 +375,12 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn finish(&mut self) -> Result<(), piet::Error> {
-        let frame = self
-            .renderer
-            .surface
-            .get_current_frame()
-            .map_err(|e| piet::Error::StackUnbalance)?;
-        let mut encoder =
-            self.renderer
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("render"),
-                });
-        let view = frame
-            .output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let texture = self
-            .renderer
-            .device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("Multisampled frame descriptor"),
-                size: wgpu::Extent3d {
-                    width: self.renderer.pipeline.size.width as u32,
-                    height: self.renderer.pipeline.size.height as u32,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 4,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Bgra8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            });
-        let msaa = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        {
-            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: true,
-                    },
-                }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.renderer.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(-1.0),
-                        store: true,
-                    }),
-                    stencil_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0),
-                        store: true,
-                    }),
-                }),
-            });
-        }
-        let glyph_brush = self.renderer.text.glyph_brush.clone();
-        let mut glyph_brush = glyph_brush.borrow_mut();
-        glyph_brush.draw_queued(
-            &self.renderer.device,
-            &mut self.renderer.staging_belt,
-            &mut encoder,
-            &view,
-            wgpu::RenderPassDepthStencilAttachment {
-                view: &self.renderer.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-                stencil_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-            },
-            self.renderer.size.width as u32,
-            self.renderer.size.height as u32,
-        );
-        self.renderer.pipeline.draw(
-            &self.renderer.device,
-            &mut self.renderer.staging_belt,
-            &mut encoder,
-            &view,
-            &msaa,
-            wgpu::RenderPassDepthStencilAttachment {
-                view: &self.renderer.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-                stencil_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-            },
-            &self.geometry,
-        );
+        self.render();
 
         self.renderer.staging_belt.finish();
-        self.renderer.queue.submit(Some(encoder.finish()));
+        self.renderer
+            .queue
+            .submit(Some(self.encoder.take().unwrap().finish()));
 
         self.renderer
             .local_pool
@@ -442,7 +481,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn current_transform(&self) -> piet::kurbo::Affine {
-        todo!()
+        self.cur_transform
     }
 
     fn with_save(

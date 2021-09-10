@@ -7,14 +7,16 @@ resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# wgpu_glyph = { git = "https://github.com/dzhou121/wgpu_glyph" }
 wgpu_glyph = "0.14.1"
 ab_glyph = "0.2.11"
 font-kit = "0.10.1"
+linked-hash-map = "0.5.4"
+rustc-hash = "1.1.0"
+pathfinder_geometry = "0.5.1"
 lyon = "0.17.5"
 piet = { git = "https://github.com/linebender/piet" }
 wgpu = { version = "0.10.0", features = ["spirv"] }
 futures = "0.3.17"
 glam = "0.10"
 raw-window-handle = "0.3.3"
-bytemuck = { version = "1.7.2", features = ["derive"]}
+bytemuck = { version = "1.7.2", features = ["derive"] }

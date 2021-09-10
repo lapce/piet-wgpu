@@ -17,6 +17,7 @@ use wgpu_glyph::{FontId, GlyphBrush, GlyphBrushBuilder, Section};
 
 use crate::context::WgpuRenderContext;
 use crate::pipeline::GpuVertex;
+use crate::text_pipeline::Instance;
 
 #[derive(Clone)]
 pub struct WgpuText {
@@ -47,156 +48,23 @@ impl WgpuText {
             scale,
         }
     }
-
-    fn glyph_vertices(
-        &self,
-        renderer: &mut WgpuRenderContext,
-        family: &FontFamily,
-        c: char,
-    ) -> Result<Rc<(Vec<[f32; 2]>, Vec<u32>)>, piet::Error> {
-        if !self.glyphs.borrow().contains_key(family) {
-            self.glyphs
-                .borrow_mut()
-                .insert(family.clone(), HashMap::new());
-        }
-
-        let mut glyphs = self.glyphs.borrow_mut();
-        let font_glyphs = glyphs.get_mut(family).unwrap();
-
-        if !font_glyphs.contains_key(&c) {
-            let (font, font_id) = self.get_font(family)?;
-            let id = font.glyph_id(c);
-            let outline = font.outline(id).ok_or(piet::Error::NotSupported)?;
-            let mut builder = lyon::path::Path::builder();
-            let mut last = None;
-            for curve in &outline.curves {
-                let start = match curve {
-                    ab_glyph::OutlineCurve::Line(p1, _) => p1,
-                    ab_glyph::OutlineCurve::Quad(p1, _, _) => p1,
-                    ab_glyph::OutlineCurve::Cubic(p1, _, _, _) => p1,
-                };
-                if let Some(p) = last.as_ref() {
-                    if p != start {
-                        builder.end(false);
-                        builder.begin(lyon::geom::point(start.x, start.y));
-                    }
-                } else {
-                    builder.begin(lyon::geom::point(start.x, start.y));
-                }
-
-                let end = match curve {
-                    ab_glyph::OutlineCurve::Line(p1, p2) => {
-                        builder.line_to(lyon::geom::point(p2.x, p2.y));
-                        p2
-                    }
-                    ab_glyph::OutlineCurve::Quad(p1, p2, p3) => {
-                        builder.quadratic_bezier_to(
-                            lyon::geom::point(p2.x, p2.y),
-                            lyon::geom::point(p3.x, p3.y),
-                        );
-                        p3
-                    }
-                    ab_glyph::OutlineCurve::Cubic(p1, p2, p3, p4) => {
-                        builder.cubic_bezier_to(
-                            lyon::geom::point(p2.x, p2.y),
-                            lyon::geom::point(p3.x, p3.y),
-                            lyon::geom::point(p4.x, p4.y),
-                        );
-                        p4
-                    }
-                };
-                last = Some(end.clone());
-            }
-            builder.close();
-            let path = builder.build();
-
-            let mut geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
-            renderer
-                .fill_tess
-                .tessellate_path(
-                    &path,
-                    &FillOptions::tolerance(0.1).with_fill_rule(tessellation::FillRule::NonZero),
-                    &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| GpuVertex {
-                        pos: vertex.position().to_array(),
-                        ..Default::default()
-                    }),
-                )
-                .map_err(|e| piet::Error::NotSupported)?;
-            println!("{} {}", geometry.vertices.len(), geometry.indices.len());
-            font_glyphs.insert(
-                c,
-                Rc::new((
-                    geometry.vertices.iter().map(|v| v.pos).collect(),
-                    geometry.indices,
-                )),
-            );
-        }
-
-        Ok(font_glyphs.get(&c).unwrap().clone())
-    }
-
-    fn get_font(&self, family: &FontFamily) -> Result<(Rc<FontArc>, FontId), piet::Error> {
-        if !self.fonts.borrow().contains_key(family) {
-            let font = self.get_new_font(family)?;
-            let font_id = self.glyph_brush.borrow_mut().add_font(font.clone());
-            self.fonts
-                .borrow_mut()
-                .insert(family.clone(), (Rc::new(font), font_id));
-        }
-        Ok(self.fonts.borrow().get(family).unwrap().clone())
-    }
-
-    fn get_new_font(&self, family: &FontFamily) -> Result<ab_glyph::FontArc, piet::Error> {
-        let family_name = match family.inner() {
-            piet::FontFamilyInner::Serif => FamilyName::Serif,
-            piet::FontFamilyInner::SansSerif => FamilyName::SansSerif,
-            piet::FontFamilyInner::Monospace => FamilyName::Monospace,
-            piet::FontFamilyInner::SystemUi => FamilyName::SansSerif,
-            piet::FontFamilyInner::Named(name) => {
-                font_kit::family_name::FamilyName::Title(name.to_string())
-            }
-            _ => FamilyName::SansSerif,
-        };
-        let handle = self
-            .source
-            .borrow()
-            .select_best_match(
-                &[family_name],
-                &font_kit::properties::Properties::new()
-                    .weight(font_kit::properties::Weight::MEDIUM),
-            )
-            .map_err(|e| piet::Error::NotSupported)?;
-        let font = match handle {
-            font_kit::handle::Handle::Path { path, font_index } => {
-                let content =
-                    std::fs::read_to_string(path).map_err(|e| piet::Error::NotSupported)?;
-                let font = FontArc::try_from_vec(content.into_bytes())
-                    .map_err(|e| piet::Error::NotSupported)?;
-                font
-            }
-            font_kit::handle::Handle::Memory { bytes, font_index } => {
-                let font =
-                    FontArc::try_from_vec(bytes.to_vec()).map_err(|e| piet::Error::NotSupported)?;
-                font
-            }
-        };
-        Ok(font)
-    }
 }
 
 #[derive(Clone)]
 pub struct WgpuTextLayout {
-    state: WgpuText,
     text: String,
     attrs: Rc<Attributes>,
+    instances: Rc<RefCell<Vec<Instance>>>,
+    instances_origins: Rc<RefCell<Vec<(f32, f32)>>>,
 }
 
 impl WgpuTextLayout {
-    pub fn new(text: String, state: WgpuText) -> Self {
+    pub fn new(text: String) -> Self {
         Self {
             text,
-            state,
             attrs: Rc::new(Attributes::default()),
+            instances: Rc::new(RefCell::new(Vec::new())),
+            instances_origins: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -204,54 +72,17 @@ impl WgpuTextLayout {
         self.attrs = Rc::new(attrs);
     }
 
-    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, pos: Point, z: f32) {
-        let font_family = &self.attrs.defaults.font;
-        if let Ok((font, font_id)) = self.state.get_font(font_family) {
-            let units_per_em = font.units_per_em().unwrap();
-            let font_size = self.attrs.defaults.font_size as f32;
-            let font_scale = font_size * (font.height_unscaled() / units_per_em);
-            let color = &self.attrs.defaults.fg_color;
-            let color = color.as_rgba();
-            let color = [
-                color.0 as f32,
-                color.1 as f32,
-                color.2 as f32,
-                color.3 as f32,
-            ];
-            let affine = ctx.cur_transform.as_coeffs();
-            let translate = [affine[4], affine[5]];
-            let mut brush = self.state.glyph_brush.borrow_mut();
-            brush.queue(Section {
-                screen_position: (
-                    ((translate[0] + pos.x) * self.state.scale) as f32,
-                    ((translate[1] + pos.y) * self.state.scale) as f32,
-                ),
-                text: vec![wgpu_glyph::Text::new(self.text.as_ref())
-                    .with_color(color)
-                    .with_scale(font_scale * self.state.scale as f32)
-                    .with_font_id(font_id)
-                    .with_z(z)],
-                ..Default::default()
-            });
-        }
+    pub fn rebuild(&self, ctx: &mut WgpuRenderContext) {
+        let mut instances = self.instances.borrow_mut();
+        instances.clear();
+        let mut instances_origins = self.instances_origins.borrow_mut();
+        instances_origins.clear();
 
-        return;
-        let font_family = &self.attrs.defaults.font;
-        let (font, font_id) = self.state.get_font(font_family).unwrap();
-        let units_per_em = font.units_per_em().unwrap();
-        let font_size = self.attrs.defaults.font_size as f32;
-        let font_scale = font_size * (font.height_unscaled() / units_per_em);
-        let scaled_font = font.as_scaled(font_size * (font.height_unscaled() / units_per_em));
-        let scale = font_scale / font.height_unscaled();
-        let scale = [scale, -scale];
-        let affine = ctx.cur_transform.as_coeffs();
-        let translate = [affine[4] as f32, affine[5] as f32];
         let mut x = 0.0;
+        let mut y = 0.0;
         for (index, c) in self.text.chars().enumerate() {
-            let translate = [
-                translate[0] + pos.x as f32 + x,
-                translate[1] + pos.y as f32 + font_size,
-            ];
+            let font_family = self.attrs.font(index);
+            let font_size = self.attrs.size(index) as f32;
             let color = self.attrs.color(index);
             let color = color.as_rgba();
             let color = [
@@ -260,128 +91,72 @@ impl WgpuTextLayout {
                 color.2 as f32,
                 color.3 as f32,
             ];
-            if let Ok(result) = self.state.glyph_vertices(ctx, font_family, c) {
-                let mut vertices: Vec<GpuVertex> = result
-                    .0
-                    .iter()
-                    .map(|pos| GpuVertex {
-                        pos: *pos,
-                        translate,
-                        scale,
-                        color,
-                        ..Default::default()
-                    })
-                    .collect();
-                let offset = ctx.geometry.vertices.len() as u32;
-                ctx.geometry
-                    .indices
-                    .append(&mut result.1.iter().map(|i| i + offset).collect());
-                ctx.geometry.vertices.append(&mut vertices);
+            if let Ok(glyph_pos) = ctx.renderer.text_pipeline.cache.get_glyph_pos(
+                c,
+                font_family,
+                font_size,
+                &ctx.renderer.device,
+                &mut ctx.renderer.staging_belt,
+                &mut ctx.encoder.as_mut().unwrap(),
+            ) {
+                let instance = Instance {
+                    origin: [x, y, 0.0],
+                    size: [
+                        glyph_pos.rect.width() as f32,
+                        glyph_pos.rect.height() as f32,
+                    ],
+                    tex_left_top: [
+                        glyph_pos.cache_rect.x0 as f32,
+                        glyph_pos.cache_rect.y0 as f32,
+                    ],
+                    tex_right_bottom: [
+                        glyph_pos.cache_rect.x1 as f32,
+                        glyph_pos.cache_rect.y1 as f32,
+                    ],
+                    color,
+                };
+                instances.push(instance);
+                instances_origins.push((x, y));
+                x += glyph_pos.rect.width() as f32;
             }
-            let id = font.glyph_id(c);
-            //let glyph = scaled_font.scaled_glyph(c);
-            //if let Some(outline) = font.outline(id) {
-            //    let mut builder = lyon::path::Path::builder();
-            //    let mut last = None;
-            //    for curve in &outline.curves {
-            //        let start = match curve {
-            //            ab_glyph::OutlineCurve::Line(p1, _) => p1,
-            //            ab_glyph::OutlineCurve::Quad(p1, _, _) => p1,
-            //            ab_glyph::OutlineCurve::Cubic(p1, _, _, _) => p1,
-            //        };
-            //        if let Some(p) = last.as_ref() {
-            //            if p != start {
-            //                builder.end(false);
-            //                builder.begin(lyon::geom::point(start.x, start.y));
-            //            }
-            //        } else {
-            //            builder.begin(lyon::geom::point(start.x, start.y));
-            //        }
-
-            //        let end = match curve {
-            //            ab_glyph::OutlineCurve::Line(p1, p2) => {
-            //                builder.line_to(lyon::geom::point(p2.x, p2.y));
-            //                p2
-            //            }
-            //            ab_glyph::OutlineCurve::Quad(p1, p2, p3) => {
-            //                builder.quadratic_bezier_to(
-            //                    lyon::geom::point(p2.x, p2.y),
-            //                    lyon::geom::point(p3.x, p3.y),
-            //                );
-            //                p3
-            //            }
-            //            ab_glyph::OutlineCurve::Cubic(p1, p2, p3, p4) => {
-            //                builder.cubic_bezier_to(
-            //                    lyon::geom::point(p2.x, p2.y),
-            //                    lyon::geom::point(p3.x, p3.y),
-            //                    lyon::geom::point(p4.x, p4.y),
-            //                );
-            //                p4
-            //            }
-            //        };
-            //        last = Some(end.clone());
-            //    }
-            //    builder.close();
-            //    let path = builder.build();
-            //    let translate = [
-            //        translate[0] + pos.x as f32 + x,
-            //        translate[1] + pos.y as f32 + font_size,
-            //    ];
-            //    let color = self.attrs.color(index);
-            //    let color = color.as_rgba();
-            //    let color = [
-            //        color.0 as f32,
-            //        color.1 as f32,
-            //        color.2 as f32,
-            //        color.3 as f32,
-            //    ];
-            //    ctx.fill_tess.tessellate_path(
-            //        &path,
-            //        &FillOptions::tolerance(0.1).with_fill_rule(tessellation::FillRule::NonZero),
-            //        &mut BuffersBuilder::new(&mut ctx.geometry, |vertex: FillVertex| GpuVertex {
-            //            pos: vertex.position().to_array(),
-            //            translate,
-            //            scale,
-            //            color,
-            //            ..Default::default()
-            //        }),
-            //    );
-            //    ctx.stroke_tess.tessellate_path(
-            //        &path,
-            //        &StrokeOptions::tolerance(0.1),
-            //        &mut BuffersBuilder::new(&mut ctx.geometry, |vertex: StrokeVertex| GpuVertex {
-            //            pos: vertex.position().to_array(),
-            //            translate,
-            //            scale,
-            //            color,
-            //            normal: vertex.normal().to_array(),
-            //            width: 0.2,
-            //            ..Default::default()
-            //        }),
-            //    );
-            //}
-            x += scaled_font.h_advance(id);
         }
+    }
+
+    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, pos: Point, z: f32) {
+        let mut instances = self.instances.borrow_mut();
+        let instances_origins = self.instances_origins.borrow();
+        for (i, instance) in instances.iter_mut().enumerate() {
+            let (x, y) = instances_origins[i];
+            instance.origin[0] = x + pos.x as f32;
+            instance.origin[1] = y + pos.y as f32;
+            instance.origin[2] = z;
+        }
+        ctx.renderer.text_pipeline.queue(&instances);
     }
 }
 
 pub struct WgpuTextLayoutBuilder {
     text: String,
-    state: WgpuText,
     attrs: Attributes,
 }
 
 impl WgpuTextLayoutBuilder {
-    pub(crate) fn new(text: impl TextStorage, state: WgpuText) -> Self {
+    pub(crate) fn new(text: impl TextStorage) -> Self {
         Self {
             text: text.as_str().to_string(),
-            state,
             attrs: Default::default(),
         }
     }
 
     fn add(&mut self, attr: TextAttribute, range: Range<usize>) {
         self.attrs.add(range, attr);
+    }
+
+    pub fn build_with_ctx(self, ctx: &mut WgpuRenderContext) -> WgpuTextLayout {
+        let mut text_layout = WgpuTextLayout::new(self.text);
+        text_layout.set_attrs(self.attrs);
+        text_layout.rebuild(ctx);
+        text_layout
     }
 }
 
@@ -398,7 +173,7 @@ impl Text for WgpuText {
     }
 
     fn new_text_layout(&mut self, text: impl piet::TextStorage) -> Self::TextLayoutBuilder {
-        Self::TextLayoutBuilder::new(text, self.clone())
+        Self::TextLayoutBuilder::new(text)
     }
 }
 
@@ -431,7 +206,7 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
     }
 
     fn build(self) -> Result<Self::Out, piet::Error> {
-        let mut text_layout = WgpuTextLayout::new(self.text, self.state);
+        let mut text_layout = WgpuTextLayout::new(self.text);
         text_layout.set_attrs(self.attrs);
         Ok(text_layout)
     }
@@ -439,7 +214,17 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
 
 impl TextLayout for WgpuTextLayout {
     fn size(&self) -> Size {
-        Size::ZERO
+        if self.instances.borrow().len() == 0 {
+            Size::ZERO
+        } else {
+            let instances = self.instances.borrow();
+            let instance_origins = self.instances_origins.borrow();
+            let last_instance = &instances[instances.len() - 1];
+            let last_instance_origins = &instance_origins[instance_origins.len() - 1];
+            let width = last_instance_origins.0 + last_instance.size[0];
+            let height = last_instance_origins.1 + last_instance.size[1];
+            Size::new(width as f64, height as f64)
+        }
     }
 
     fn trailing_whitespace_width(&self) -> f64 {
@@ -451,11 +236,11 @@ impl TextLayout for WgpuTextLayout {
     }
 
     fn text(&self) -> &str {
-        ""
+        &self.text
     }
 
     fn line_text(&self, line_number: usize) -> Option<&str> {
-        Some("")
+        Some(&self.text)
     }
 
     fn line_metric(&self, line_number: usize) -> Option<LineMetric> {
@@ -479,8 +264,8 @@ impl TextLayout for WgpuTextLayout {
 struct Attributes {
     defaults: piet::util::LayoutDefaults,
     color: Vec<Span<Color>>,
-    font: Option<Span<FontFamily>>,
-    size: Option<Span<f64>>,
+    font: Vec<Span<FontFamily>>,
+    size: Vec<Span<f64>>,
     weight: Option<Span<FontWeight>>,
     style: Option<Span<FontStyle>>,
 }
@@ -520,11 +305,13 @@ impl Attributes {
         &self.defaults.fg_color
     }
 
-    fn size(&self) -> f64 {
-        self.size
-            .as_ref()
-            .map(|s| s.payload)
-            .unwrap_or(self.defaults.font_size)
+    fn size(&self, index: usize) -> f64 {
+        for r in &self.size {
+            if r.range.contains(&index) {
+                return r.payload;
+            }
+        }
+        self.defaults.font_size
     }
 
     fn weight(&self) -> FontWeight {
@@ -544,37 +331,12 @@ impl Attributes {
         )
     }
 
-    fn font(&self) -> &FontFamily {
-        self.font
-            .as_ref()
-            .map(|t| &t.payload)
-            .unwrap_or_else(|| &self.defaults.font)
-    }
-
-    fn next_span_end(&self, max: usize) -> usize {
-        self.font
-            .as_ref()
-            .map(Span::range_end)
-            .unwrap_or(max)
-            .min(self.size.as_ref().map(Span::range_end).unwrap_or(max))
-            .min(self.weight.as_ref().map(Span::range_end).unwrap_or(max))
-            .min(self.style.as_ref().map(Span::range_end).unwrap_or(max))
-            .min(max)
-    }
-
-    // invariant: `last_pos` is the end of at least one span.
-    fn clear_up_to(&mut self, last_pos: usize) {
-        if self.font.as_ref().map(Span::range_end) == Some(last_pos) {
-            self.font = None;
+    fn font(&self, index: usize) -> &FontFamily {
+        for r in &self.font {
+            if r.range.contains(&index) {
+                return &r.payload;
+            }
         }
-        if self.weight.as_ref().map(Span::range_end) == Some(last_pos) {
-            self.weight = None;
-        }
-        if self.style.as_ref().map(Span::range_end) == Some(last_pos) {
-            self.style = None;
-        }
-        if self.size.as_ref().map(Span::range_end) == Some(last_pos) {
-            self.size = None;
-        }
+        &self.defaults.font
     }
 }
