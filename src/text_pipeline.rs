@@ -13,7 +13,7 @@ use pathfinder_geometry::{
 };
 use piet::{
     kurbo::{Point, Rect, Size},
-    FontFamily,
+    FontFamily, FontWeight,
 };
 use rustc_hash::{FxHashMap, FxHasher};
 use std::{
@@ -264,15 +264,23 @@ impl Pipeline {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Default)]
-struct GlyphInfo {
+pub(crate) struct GlyphInfo {
     font_id: usize,
     glyph_id: u32,
     font_size: u32,
 }
 
 #[derive(Default, Clone)]
+pub(crate) struct GlyphMetricInfo {
+    pub(crate) ascent: f64,
+    pub(crate) descent: f64,
+    pub(crate) line_gap: f64,
+}
+
+#[derive(Default, Clone)]
 pub(crate) struct GlyphPosInfo {
-    info: GlyphInfo,
+    pub(crate) info: GlyphInfo,
+    pub(crate) metric: GlyphMetricInfo,
     pub(crate) rect: Rect,
     pub(crate) cache_rect: Rect,
 }
@@ -295,8 +303,8 @@ pub struct Cache {
     height: u32,
 
     font_source: SystemSource,
-    fonts: FxHashMap<FontFamily, Font>,
-    font_ids: FxHashMap<FontFamily, usize>,
+    fonts: FxHashMap<(FontFamily, FontWeight), Font>,
+    font_ids: FxHashMap<(FontFamily, FontWeight), usize>,
     rows: LinkedHashMap<usize, Row, FxBuildHasher>,
     glyphs: FxHashMap<GlyphInfo, (usize, usize)>,
     pub(crate) scale: f64,
@@ -349,8 +357,9 @@ impl Cache {
     pub(crate) fn get_glyph_pos(
         &mut self,
         c: char,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_size: f32,
+        font_weight: FontWeight,
         device: &wgpu::Device,
         staging_belt: &mut wgpu::util::StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
@@ -358,7 +367,7 @@ impl Cache {
         let scale = self.scale * 2.0;
 
         let font_size = (font_size as f64 * scale).round() as u32;
-        let (font, font_id) = self.get_font(font_family)?;
+        let (font, font_id) = self.get_font(font_family.clone(), font_weight)?;
         let glyph_id = font.glyph_for_char(c).ok_or(piet::Error::MissingFont)?;
         let glyph = GlyphInfo {
             font_id,
@@ -371,13 +380,18 @@ impl Cache {
             return Ok(&row.glyphs[*index]);
         }
 
-        let (font, font_id) = self.get_font(font_family)?;
+        let (font, font_id) = self.get_font(font_family, font_weight)?;
         let font_metrics = font.metrics();
         let units_per_em = font_metrics.units_per_em as f32;
         let glyph_width = font.advance(glyph_id).unwrap().x() / units_per_em * font_size as f32;
         let glyph_height = (font_metrics.ascent - font_metrics.descent + font_metrics.line_gap)
             / units_per_em
             * font_size as f32;
+        let glyph_metric = GlyphMetricInfo {
+            ascent: (font_metrics.ascent / units_per_em * font_size as f32) as f64 / scale,
+            descent: (font_metrics.descent / units_per_em * font_size as f32) as f64 / scale,
+            line_gap: (font_metrics.line_gap / units_per_em * font_size as f32) as f64 / scale,
+        };
         let mut glyph_rect = Size::new(glyph_width as f64, glyph_height as f64).to_rect();
 
         let mut canvas = Canvas::new(
@@ -415,6 +429,7 @@ impl Cache {
                             glyph_rect.size().width / scale,
                             glyph_rect.size().height / scale,
                         )),
+                        metric: glyph_metric.clone(),
                         cache_rect,
                     };
 
@@ -453,6 +468,7 @@ impl Cache {
                     glyph_rect.size().width / scale,
                     glyph_rect.size().height / scale,
                 )),
+                metric: glyph_metric,
                 cache_rect,
             };
 
@@ -485,19 +501,24 @@ impl Cache {
         Ok(&row.glyphs[*index])
     }
 
-    fn get_font(&mut self, family: &FontFamily) -> Result<(&Font, usize), piet::Error> {
-        if !self.fonts.contains_key(family) {
-            let font = self.get_new_font(family)?;
-            self.fonts.insert(family.clone(), font);
-            self.font_ids.insert(family.clone(), self.font_ids.len());
+    fn get_font(
+        &mut self,
+        family: FontFamily,
+        weight: FontWeight,
+    ) -> Result<(&Font, usize), piet::Error> {
+        if !self.fonts.contains_key(&(family.clone(), weight)) {
+            let font = self.get_new_font(&family, weight)?;
+            self.fonts.insert((family.clone(), weight), font);
+            self.font_ids
+                .insert((family.clone(), weight), self.font_ids.len());
         }
         Ok((
-            self.fonts.get(family).unwrap(),
-            *self.font_ids.get(family).unwrap(),
+            self.fonts.get(&(family.clone(), weight)).unwrap(),
+            *self.font_ids.get(&(family.clone(), weight)).unwrap(),
         ))
     }
 
-    fn get_new_font(&self, family: &FontFamily) -> Result<Font, piet::Error> {
+    fn get_new_font(&self, family: &FontFamily, weight: FontWeight) -> Result<Font, piet::Error> {
         let family_name = match family.inner() {
             piet::FontFamilyInner::Serif => FamilyName::Serif,
             piet::FontFamilyInner::SansSerif => FamilyName::SansSerif,
@@ -513,7 +534,7 @@ impl Cache {
             .select_best_match(
                 &[family_name],
                 &font_kit::properties::Properties::new()
-                    .weight(font_kit::properties::Weight::MEDIUM),
+                    .weight(font_kit::properties::Weight(weight.to_raw() as f32)),
             )
             .map_err(|e| piet::Error::MissingFont)?;
         let font = handle.load().map_err(|_| piet::Error::MissingFont)?;

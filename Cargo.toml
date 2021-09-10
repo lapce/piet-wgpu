@@ -7,8 +7,6 @@ resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-wgpu_glyph = "0.14.1"
-ab_glyph = "0.2.11"
 font-kit = "0.10.1"
 linked-hash-map = "0.5.4"
 rustc-hash = "1.1.0"

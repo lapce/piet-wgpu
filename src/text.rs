@@ -1,30 +1,27 @@
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
-use ab_glyph::{Font, FontArc, FontVec, PxScale, ScaleFont};
 use font_kit::family_name::FamilyName;
 use font_kit::source::SystemSource;
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillVertex, StrokeOptions, StrokeVertex, VertexBuffers,
 };
 use lyon::tessellation;
+use piet::kurbo::Line;
 use piet::Color;
 use piet::{
     kurbo::{Point, Size},
     FontFamily, FontStyle, FontWeight, HitTestPoint, HitTestPosition, LineMetric, Text,
     TextAttribute, TextLayout, TextLayoutBuilder, TextStorage,
 };
-use wgpu_glyph::{FontId, GlyphBrush, GlyphBrushBuilder, Section};
 
 use crate::context::WgpuRenderContext;
 use crate::pipeline::GpuVertex;
-use crate::text_pipeline::Instance;
+use crate::text_pipeline::{GlyphMetricInfo, Instance};
 
 #[derive(Clone)]
 pub struct WgpuText {
     source: Rc<RefCell<SystemSource>>,
-    fonts: Rc<RefCell<HashMap<FontFamily, (Rc<ab_glyph::FontArc>, FontId)>>>,
     glyphs: Rc<RefCell<HashMap<FontFamily, HashMap<char, Rc<(Vec<[f32; 2]>, Vec<u32>)>>>>>,
-    pub(crate) glyph_brush: Rc<RefCell<GlyphBrush<wgpu::DepthStencilState>>>,
     pub(crate) scale: f64,
 }
 
@@ -32,19 +29,7 @@ impl WgpuText {
     pub(crate) fn new(device: &wgpu::Device, scale: f64) -> Self {
         Self {
             source: Rc::new(RefCell::new(SystemSource::new())),
-            fonts: Rc::new(RefCell::new(HashMap::new())),
             glyphs: Rc::new(RefCell::new(HashMap::new())),
-            glyph_brush: Rc::new(RefCell::new(
-                GlyphBrushBuilder::using_fonts(vec![])
-                    .depth_stencil_state(wgpu::DepthStencilState {
-                        format: wgpu::TextureFormat::Depth32Float,
-                        depth_write_enabled: true,
-                        depth_compare: wgpu::CompareFunction::GreaterEqual,
-                        stencil: wgpu::StencilState::default(),
-                        bias: wgpu::DepthBiasState::default(),
-                    })
-                    .build(device, wgpu::TextureFormat::Bgra8Unorm),
-            )),
             scale,
         }
     }
@@ -56,6 +41,7 @@ pub struct WgpuTextLayout {
     attrs: Rc<Attributes>,
     instances: Rc<RefCell<Vec<Instance>>>,
     instances_origins: Rc<RefCell<Vec<(f32, f32)>>>,
+    instances_metrics: Rc<RefCell<Vec<GlyphMetricInfo>>>,
 }
 
 impl WgpuTextLayout {
@@ -65,6 +51,7 @@ impl WgpuTextLayout {
             attrs: Rc::new(Attributes::default()),
             instances: Rc::new(RefCell::new(Vec::new())),
             instances_origins: Rc::new(RefCell::new(Vec::new())),
+            instances_metrics: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -77,12 +64,15 @@ impl WgpuTextLayout {
         instances.clear();
         let mut instances_origins = self.instances_origins.borrow_mut();
         instances_origins.clear();
+        let mut instances_metrics = self.instances_metrics.borrow_mut();
+        instances_metrics.clear();
 
         let mut x = 0.0;
         let mut y = 0.0;
         for (index, c) in self.text.chars().enumerate() {
             let font_family = self.attrs.font(index);
             let font_size = self.attrs.size(index) as f32;
+            let font_weight = self.attrs.font_weight(index);
             let color = self.attrs.color(index);
             let color = color.as_rgba();
             let color = [
@@ -95,6 +85,7 @@ impl WgpuTextLayout {
                 c,
                 font_family,
                 font_size,
+                font_weight,
                 &ctx.renderer.device,
                 &mut ctx.renderer.staging_belt,
                 &mut ctx.encoder.as_mut().unwrap(),
@@ -117,6 +108,7 @@ impl WgpuTextLayout {
                 };
                 instances.push(instance);
                 instances_origins.push((x, y));
+                instances_metrics.push(glyph_pos.metric.clone());
                 x += glyph_pos.rect.width() as f32;
             }
         }
@@ -132,6 +124,14 @@ impl WgpuTextLayout {
             instance.origin[2] = z;
         }
         ctx.renderer.text_pipeline.queue(&instances);
+    }
+
+    pub fn cursor_line_for_text_position(&self, text_pos: usize) -> Line {
+        let pos = self.hit_test_text_position(text_pos);
+        let line_metric = self.line_metric(0).unwrap();
+        let p0 = (pos.point.x, line_metric.y_offset);
+        let p1 = (pos.point.x, line_metric.y_offset + line_metric.height);
+        Line::new(p0, p1)
     }
 }
 
@@ -219,6 +219,7 @@ impl TextLayout for WgpuTextLayout {
         } else {
             let instances = self.instances.borrow();
             let instance_origins = self.instances_origins.borrow();
+
             let last_instance = &instances[instances.len() - 1];
             let last_instance_origins = &instance_origins[instance_origins.len() - 1];
             let width = last_instance_origins.0 + last_instance.size[0];
@@ -244,7 +245,21 @@ impl TextLayout for WgpuTextLayout {
     }
 
     fn line_metric(&self, line_number: usize) -> Option<LineMetric> {
-        Some(LineMetric::default())
+        let mut metric = LineMetric {
+            start_offset: 0,
+            end_offset: self.text.len(),
+            trailing_whitespace: 0,
+            baseline: 0.0,
+            height: 0.0,
+            y_offset: 0.0,
+        };
+        if self.instances.borrow().len() == 0 {
+            return Some(metric);
+        }
+        let glyph_metric = &self.instances_metrics.borrow()[0];
+        metric.baseline = glyph_metric.ascent;
+        metric.height = glyph_metric.ascent - glyph_metric.descent + glyph_metric.line_gap;
+        Some(metric)
     }
 
     fn line_count(&self) -> usize {
@@ -256,7 +271,23 @@ impl TextLayout for WgpuTextLayout {
     }
 
     fn hit_test_text_position(&self, idx: usize) -> HitTestPosition {
-        HitTestPosition::default()
+        if self.instances.borrow().len() == 0 {
+            return HitTestPosition::default();
+        }
+
+        let instances = self.instances.borrow();
+        let instance_origins = self.instances_origins.borrow();
+
+        let cur_instance = &instances[idx.min(instances.len() - 1)];
+        let cur_instance_origins = &instance_origins[idx.min(instance_origins.len() - 1)];
+        let mut x = cur_instance_origins.0;
+        if idx >= instances.len() {
+            x += cur_instance.size[0];
+        }
+
+        let mut pos = HitTestPosition::default();
+        pos.point = Point::new(x as f64, 0.0);
+        pos
     }
 }
 
@@ -266,7 +297,7 @@ struct Attributes {
     color: Vec<Span<Color>>,
     font: Vec<Span<FontFamily>>,
     size: Vec<Span<f64>>,
-    weight: Option<Span<FontWeight>>,
+    weight: Vec<Span<FontWeight>>,
     style: Option<Span<FontStyle>>,
 }
 
@@ -292,6 +323,7 @@ impl Attributes {
     fn add(&mut self, range: Range<usize>, attr: TextAttribute) {
         match attr {
             TextAttribute::TextColor(color) => self.color.push(Span::new(color, range)),
+            TextAttribute::Weight(weight) => self.weight.push(Span::new(weight, range)),
             _ => {}
         }
     }
@@ -314,13 +346,6 @@ impl Attributes {
         self.defaults.font_size
     }
 
-    fn weight(&self) -> FontWeight {
-        self.weight
-            .as_ref()
-            .map(|w| w.payload)
-            .unwrap_or(self.defaults.weight)
-    }
-
     fn italic(&self) -> bool {
         matches!(
             self.style
@@ -331,12 +356,21 @@ impl Attributes {
         )
     }
 
-    fn font(&self, index: usize) -> &FontFamily {
+    fn font(&self, index: usize) -> FontFamily {
         for r in &self.font {
             if r.range.contains(&index) {
-                return &r.payload;
+                return r.payload.clone();
             }
         }
-        &self.defaults.font
+        self.defaults.font.clone()
+    }
+
+    fn font_weight(&self, index: usize) -> FontWeight {
+        for r in &self.weight {
+            if r.range.contains(&index) {
+                return r.payload;
+            }
+        }
+        self.defaults.weight
     }
 }

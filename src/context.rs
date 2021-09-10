@@ -251,7 +251,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     lyon::geom::Point::new(rect.x0 as f32, rect.y0 as f32),
                     lyon::geom::Size::new(rect.width() as f32, rect.height() as f32),
                 ),
-                &StrokeOptions::tolerance(0.02),
+                &StrokeOptions::tolerance(0.02).with_line_width(width as f32),
                 &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| GpuVertex {
                     pos: vertex.position().to_array(),
                     z,
@@ -378,9 +378,8 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         self.render();
 
         self.renderer.staging_belt.finish();
-        self.renderer
-            .queue
-            .submit(Some(self.encoder.take().unwrap().finish()));
+        let commond_buffer = self.encoder.take().unwrap().finish();
+        self.renderer.queue.submit(Some(commond_buffer));
 
         self.renderer
             .local_pool
