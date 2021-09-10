@@ -45,6 +45,8 @@ pub struct GpuVertex {
     pub(crate) blur_radius: f32,
     pub(crate) tex: f32,
     pub(crate) tex_pos: [f32; 2],
+    pub(crate) clip: f32,
+    pub(crate) clip_rect: [f32; 4],
 }
 
 unsafe impl bytemuck::Pod for GpuVertex {}
@@ -64,6 +66,8 @@ impl Default for GpuVertex {
             blur_radius: 0.0,
             tex: 0.0,
             tex_pos: [0.0, 0.0],
+            clip: 0.0,
+            clip_rect: [0.0, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -188,6 +192,8 @@ impl Pipeline {
                         8 => Float32,
                         9 => Float32,
                         10 => Float32x2,
+                        11 => Float32,
+                        12 => Float32x4,
                     ),
                 }],
             },

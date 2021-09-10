@@ -2,6 +2,7 @@ mod context;
 mod font;
 mod layer;
 mod pipeline;
+mod svg;
 mod text;
 mod transformation;
 

@@ -38,6 +38,7 @@ impl WgpuText {
 pub struct WgpuTextLayout {
     text: String,
     attrs: Rc<Attributes>,
+    ref_glyph: Rc<RefCell<GlyphPosInfo>>,
     glyphs: Rc<RefCell<Vec<GlyphPosInfo>>>,
     geometry: Rc<RefCell<VertexBuffers<GpuVertex, u32>>>,
 }
@@ -48,6 +49,7 @@ impl WgpuTextLayout {
             text,
             attrs: Rc::new(Attributes::default()),
             glyphs: Rc::new(RefCell::new(Vec::new())),
+            ref_glyph: Rc::new(RefCell::new(GlyphPosInfo::default())),
             geometry: Rc::new(RefCell::new(VertexBuffers::new())),
         }
     }
@@ -57,6 +59,21 @@ impl WgpuTextLayout {
     }
 
     pub fn rebuild(&self, ctx: &mut WgpuRenderContext) {
+        let font_family = self.attrs.defaults.font.clone();
+        let font_size = self.attrs.defaults.font_size;
+        let font_weight = self.attrs.defaults.weight;
+        if let Ok(glyph_pos) = ctx.renderer.pipeline.cache.get_glyph_pos(
+            'W',
+            font_family,
+            font_size as f32,
+            font_weight,
+            &ctx.renderer.device,
+            &mut ctx.renderer.staging_belt,
+            &mut ctx.encoder.as_mut().unwrap(),
+        ) {
+            *self.ref_glyph.borrow_mut() = glyph_pos.clone();
+        }
+
         let mut glyphs = self.glyphs.borrow_mut();
         glyphs.clear();
         let mut geometry = self.geometry.borrow_mut();
@@ -137,7 +154,13 @@ impl WgpuTextLayout {
         }
     }
 
-    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, translate: [f32; 2]) {
+    pub(crate) fn draw_text(
+        &self,
+        ctx: &mut WgpuRenderContext,
+        translate: [f32; 2],
+        clip: f32,
+        clip_rect: [f32; 4],
+    ) {
         let offset = ctx.geometry.vertices.len() as u32;
         let geometry = self.geometry.borrow();
         let mut vertices = geometry
@@ -146,6 +169,8 @@ impl WgpuTextLayout {
             .map(|v| {
                 let mut v = v.clone();
                 v.translate = translate;
+                v.clip = clip;
+                v.clip_rect = clip_rect;
                 v
             })
             .collect();
@@ -243,7 +268,8 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
 impl TextLayout for WgpuTextLayout {
     fn size(&self) -> Size {
         if self.glyphs.borrow().len() == 0 {
-            Size::ZERO
+            let ref_glyph = self.ref_glyph.borrow();
+            Size::new(0.0, ref_glyph.rect.height())
         } else {
             let glyphs = self.glyphs.borrow();
 
@@ -279,10 +305,7 @@ impl TextLayout for WgpuTextLayout {
             height: 0.0,
             y_offset: 0.0,
         };
-        if self.glyphs.borrow().len() == 0 {
-            return Some(metric);
-        }
-        let glyph = &self.glyphs.borrow()[0];
+        let glyph = &self.ref_glyph.borrow();
         metric.baseline = glyph.metric.ascent;
         metric.height = glyph.metric.ascent - glyph.metric.descent + glyph.metric.line_gap;
         Some(metric)

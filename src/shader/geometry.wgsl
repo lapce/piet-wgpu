@@ -20,6 +20,8 @@ struct VertexInput {
     [[location(8)]] v_blur_radius: f32;
     [[location(9)]] v_tex: f32;
     [[location(10)]] v_tex_pos: vec2<f32>;
+    [[location(11)]] v_clip: f32;
+    [[location(12)]] v_clip_rect: vec4<f32>;
 };
 
 struct VertexOutput {

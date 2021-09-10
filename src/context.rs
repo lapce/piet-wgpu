@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::{
     pipeline::GpuVertex,
+    svg::{convert_path, convert_stroke, FALLBACK_COLOR},
     text::{WgpuText, WgpuTextLayout},
     transformation::Transformation,
     WgpuRenderer,
@@ -26,6 +27,7 @@ use piet::{
     kurbo::{Affine, Point, Rect, Shape, Size, Vec2},
     Color, FontFamily, Image, IntoBrush, RenderContext,
 };
+use usvg::NodeExt;
 
 pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
@@ -130,12 +132,51 @@ impl<'a> WgpuRenderContext<'a> {
         }
     }
 
-    pub fn pop_clip(&mut self) {
+    fn pop_clip(&mut self) {
         self.clip_stack.pop();
     }
 
     pub(crate) fn current_clip(&self) -> Option<&Rect> {
         self.clip_stack.last()
+    }
+
+    pub fn draw_svg(&mut self, tree: &usvg::Tree) {
+        let view_box = tree.svg_node().view_box;
+        for node in tree.root().descendants() {
+            if let usvg::NodeKind::Path(ref p) = *node.borrow() {
+                let t = node.transform();
+                if let Some(ref fill) = p.fill {
+                    let color = match fill.paint {
+                        usvg::Paint::Color(c) => c,
+                        _ => FALLBACK_COLOR,
+                    };
+                    self.fill_tess.tessellate(
+                        convert_path(p),
+                        &FillOptions::tolerance(0.01),
+                        &mut BuffersBuilder::new(&mut self.geometry, |vertex: FillVertex| {
+                            GpuVertex {
+                                pos: vertex.position().to_array(),
+                                ..Default::default()
+                            }
+                        }),
+                    );
+                }
+
+                if let Some(ref stroke) = p.stroke {
+                    let (stroke_color, stroke_opts) = convert_stroke(stroke);
+                    let _ = self.stroke_tess.tessellate(
+                        convert_path(p),
+                        &stroke_opts.with_tolerance(0.01),
+                        &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| {
+                            GpuVertex {
+                                pos: vertex.position().to_array(),
+                                ..Default::default()
+                            }
+                        }),
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -283,7 +324,11 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         let affine = self.cur_transform.as_coeffs();
         let point: Point = pos.into();
         let translate = [(affine[4] + point.x) as f32, (affine[5] + point.y) as f32];
-        layout.draw_text(self, translate);
+        let (clip, clip_rect) = self
+            .current_clip()
+            .map(|r| (1.0, [r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32]))
+            .unwrap_or((0.0, [0.0, 0.0, 0.0, 0.0]));
+        layout.draw_text(self, translate, clip, clip_rect);
     }
 
     fn save(&mut self) -> Result<(), piet::Error> {
@@ -296,7 +341,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn restore(&mut self) -> Result<(), piet::Error> {
-        // self.render();
         if let Some(state) = self.state_stack.pop() {
             self.cur_transform = state.transform;
             for _ in 0..state.n_clip {
