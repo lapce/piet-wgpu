@@ -173,6 +173,7 @@ impl WgpuRenderer {
         self.pipeline.scale = scale;
         self.text.scale = scale;
         self.text_pipeline.cache.scale = scale;
+        self.pipeline.cache.scale = scale;
     }
 
     pub fn text(&self) -> WgpuText {

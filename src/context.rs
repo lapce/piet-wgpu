@@ -147,8 +147,8 @@ impl<'a> WgpuRenderContext<'a> {
     }
 
     pub(crate) fn render(&mut self) {
-        self.render_shapes();
-        self.render_text();
+        // self.render_text();
+        // self.render_shapes();
     }
 
     pub(crate) fn render_shapes(&mut self) {
@@ -178,8 +178,8 @@ impl<'a> WgpuRenderContext<'a> {
     }
 
     pub(crate) fn render_text(&mut self) {
-        let affine = self.cur_transform.as_coeffs();
-        let translate = [affine[4] as f32, affine[5] as f32];
+        //let affine = self.cur_transform.as_coeffs();
+        //let translate = [affine[4] as f32, affine[5] as f32];
         self.renderer.text_pipeline.draw(
             &self.renderer.device,
             &mut self.renderer.staging_belt,
@@ -196,7 +196,7 @@ impl<'a> WgpuRenderContext<'a> {
                     store: true,
                 }),
             },
-            translate,
+            [0.0, 0.0],
         );
     }
 }
@@ -347,8 +347,10 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<piet::kurbo::Point>) {
-        layout.draw_text(self, pos.into(), self.cur_depth);
-        self.pending_text = true;
+        let affine = self.cur_transform.as_coeffs();
+        let point: Point = pos.into();
+        let translate = [(affine[4] + point.x) as f32, (affine[5] + point.y) as f32];
+        layout.draw_text(self, translate);
     }
 
     fn save(&mut self) -> Result<(), piet::Error> {
@@ -362,7 +364,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn restore(&mut self) -> Result<(), piet::Error> {
-        self.render();
+        // self.render();
         if let Some(state) = self.state_stack.pop() {
             self.cur_transform = state.transform;
             for _ in 0..state.n_clip {
@@ -375,7 +377,25 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn finish(&mut self) -> Result<(), piet::Error> {
-        self.render();
+        self.renderer.pipeline.draw(
+            &self.renderer.device,
+            &mut self.renderer.staging_belt,
+            &mut self.encoder.as_mut().unwrap(),
+            &self.view,
+            &self.msaa,
+            wgpu::RenderPassDepthStencilAttachment {
+                view: &self.renderer.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                }),
+                stencil_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                }),
+            },
+            &self.geometry,
+        );
 
         self.renderer.staging_belt.finish();
         let commond_buffer = self.encoder.take().unwrap().finish();
@@ -465,9 +485,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 z,
                 translate,
                 color,
-                scale: [1.0, 1.0],
-                normal: [0.0, 0.0],
-                width: 0.0,
                 blur_radius: blur_radius as f32,
                 blur_rect: [
                     blur_rect.x0 as f32,
@@ -475,6 +492,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     blur_rect.x1 as f32,
                     blur_rect.y1 as f32,
                 ],
+                ..Default::default()
             }),
         );
     }

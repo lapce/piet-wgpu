@@ -5,6 +5,8 @@ struct Globals {
 };
 
 [[group(0), binding(0)]] var<uniform> globals: Globals;
+[[group(0), binding(1)]] var font_sampler: sampler;
+[[group(0), binding(2)]] var font_tex: texture_2d<f32>;
     
 struct VertexInput {
     [[location(0)]] v_pos: vec2<f32>;
@@ -16,6 +18,8 @@ struct VertexInput {
     [[location(6)]] v_width: f32;
     [[location(7)]] v_rect: vec4<f32>;
     [[location(8)]] v_blur_radius: f32;
+    [[location(9)]] v_tex: f32;
+    [[location(10)]] v_tex_pos: vec2<f32>;
 };
 
 struct VertexOutput {
@@ -24,6 +28,8 @@ struct VertexOutput {
     [[location(1)]] pos: vec2<f32>;
     [[location(2)]] rect: vec4<f32>;
     [[location(3)]] blur_radius: f32;
+    [[location(4)]] tex: f32;
+    [[location(5)]] tex_pos: vec2<f32>;
 };
 
 [[stage(vertex)]]
@@ -45,6 +51,8 @@ fn main(input: VertexInput) -> VertexOutput {
     out.blur_radius = input.v_blur_radius;
     out.rect = input.v_rect;
     out.pos = input.v_pos;
+    out.tex = input.v_tex;
+    out.tex_pos = input.v_tex_pos;
     
     return out;
 }
@@ -73,6 +81,14 @@ fn main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
            vec2<f32>(input.pos.x, input.pos.y),
            input.blur_radius
         );
+    }
+
+    var alpha: f32 = textureSample(font_tex, font_sampler, input.tex_pos).r;
+    if (input.tex > 0.0) {
+        if (alpha <= 0.0) {
+            discard;
+        }
+        color.w = color.w * alpha;
     }
     return color;
 }

@@ -15,8 +15,7 @@ use piet::{
 };
 
 use crate::context::WgpuRenderContext;
-use crate::pipeline::GpuVertex;
-use crate::text_pipeline::{GlyphMetricInfo, Instance};
+use crate::pipeline::{GlyphMetricInfo, GlyphPosInfo, GpuVertex};
 
 #[derive(Clone)]
 pub struct WgpuText {
@@ -39,9 +38,8 @@ impl WgpuText {
 pub struct WgpuTextLayout {
     text: String,
     attrs: Rc<Attributes>,
-    instances: Rc<RefCell<Vec<Instance>>>,
-    instances_origins: Rc<RefCell<Vec<(f32, f32)>>>,
-    instances_metrics: Rc<RefCell<Vec<GlyphMetricInfo>>>,
+    glyphs: Rc<RefCell<Vec<GlyphPosInfo>>>,
+    geometry: Rc<RefCell<VertexBuffers<GpuVertex, u32>>>,
 }
 
 impl WgpuTextLayout {
@@ -49,9 +47,8 @@ impl WgpuTextLayout {
         Self {
             text,
             attrs: Rc::new(Attributes::default()),
-            instances: Rc::new(RefCell::new(Vec::new())),
-            instances_origins: Rc::new(RefCell::new(Vec::new())),
-            instances_metrics: Rc::new(RefCell::new(Vec::new())),
+            glyphs: Rc::new(RefCell::new(Vec::new())),
+            geometry: Rc::new(RefCell::new(VertexBuffers::new())),
         }
     }
 
@@ -60,12 +57,11 @@ impl WgpuTextLayout {
     }
 
     pub fn rebuild(&self, ctx: &mut WgpuRenderContext) {
-        let mut instances = self.instances.borrow_mut();
-        instances.clear();
-        let mut instances_origins = self.instances_origins.borrow_mut();
-        instances_origins.clear();
-        let mut instances_metrics = self.instances_metrics.borrow_mut();
-        instances_metrics.clear();
+        let mut glyphs = self.glyphs.borrow_mut();
+        glyphs.clear();
+        let mut geometry = self.geometry.borrow_mut();
+        geometry.vertices.clear();
+        geometry.indices.clear();
 
         let mut x = 0.0;
         let mut y = 0.0;
@@ -81,7 +77,7 @@ impl WgpuTextLayout {
                 color.2 as f32,
                 color.3 as f32,
             ];
-            if let Ok(glyph_pos) = ctx.renderer.text_pipeline.cache.get_glyph_pos(
+            if let Ok(glyph_pos) = ctx.renderer.pipeline.cache.get_glyph_pos(
                 c,
                 font_family,
                 font_size,
@@ -90,40 +86,72 @@ impl WgpuTextLayout {
                 &mut ctx.renderer.staging_belt,
                 &mut ctx.encoder.as_mut().unwrap(),
             ) {
-                let instance = Instance {
-                    origin: [x, y, 0.0],
-                    size: [
-                        glyph_pos.rect.width() as f32,
-                        glyph_pos.rect.height() as f32,
-                    ],
-                    tex_left_top: [
-                        glyph_pos.cache_rect.x0 as f32,
-                        glyph_pos.cache_rect.y0 as f32,
-                    ],
-                    tex_right_bottom: [
-                        glyph_pos.cache_rect.x1 as f32,
-                        glyph_pos.cache_rect.y1 as f32,
-                    ],
-                    color,
-                };
-                instances.push(instance);
-                instances_origins.push((x, y));
-                instances_metrics.push(glyph_pos.metric.clone());
+                let mut glyph_pos = glyph_pos.clone();
+                glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
+
+                let i = RefCell::new(0);
+                ctx.fill_tess.tessellate_rectangle(
+                    &lyon::geom::Rect::new(
+                        lyon::geom::Point::new(glyph_pos.rect.x0 as f32, glyph_pos.rect.y0 as f32),
+                        lyon::geom::Size::new(
+                            glyph_pos.rect.width() as f32,
+                            glyph_pos.rect.height() as f32,
+                        ),
+                    ),
+                    &FillOptions::tolerance(0.1).with_fill_rule(lyon::path::FillRule::NonZero),
+                    &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| {
+                        let tex_pos = match *i.borrow() {
+                            0 => [
+                                glyph_pos.cache_rect.x0 as f32,
+                                glyph_pos.cache_rect.y0 as f32,
+                            ],
+                            1 => [
+                                glyph_pos.cache_rect.x0 as f32,
+                                glyph_pos.cache_rect.y1 as f32,
+                            ],
+                            2 => [
+                                glyph_pos.cache_rect.x1 as f32,
+                                glyph_pos.cache_rect.y1 as f32,
+                            ],
+                            3 => [
+                                glyph_pos.cache_rect.x1 as f32,
+                                glyph_pos.cache_rect.y0 as f32,
+                            ],
+                            _ => [0.0, 0.0],
+                        };
+                        *i.borrow_mut() += 1;
+                        GpuVertex {
+                            pos: vertex.position().to_array(),
+                            tex: 1.0,
+                            tex_pos,
+                            color,
+                            ..Default::default()
+                        }
+                    }),
+                );
+                *i.borrow_mut() = 0;
+
                 x += glyph_pos.rect.width() as f32;
+                glyphs.push(glyph_pos);
             }
         }
     }
 
-    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, pos: Point, z: f32) {
-        let mut instances = self.instances.borrow_mut();
-        let instances_origins = self.instances_origins.borrow();
-        for (i, instance) in instances.iter_mut().enumerate() {
-            let (x, y) = instances_origins[i];
-            instance.origin[0] = x + pos.x as f32;
-            instance.origin[1] = y + pos.y as f32;
-            instance.origin[2] = z;
-        }
-        ctx.renderer.text_pipeline.queue(&instances);
+    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, translate: [f32; 2]) {
+        let offset = ctx.geometry.vertices.len() as u32;
+        let geometry = self.geometry.borrow();
+        let mut vertices = geometry
+            .vertices
+            .iter()
+            .map(|v| {
+                let mut v = v.clone();
+                v.translate = translate;
+                v
+            })
+            .collect();
+        let mut indices = geometry.indices.iter().map(|i| *i + offset).collect();
+        ctx.geometry.vertices.append(&mut vertices);
+        ctx.geometry.indices.append(&mut indices);
     }
 
     pub fn cursor_line_for_text_position(&self, text_pos: usize) -> Line {
@@ -214,16 +242,14 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
 
 impl TextLayout for WgpuTextLayout {
     fn size(&self) -> Size {
-        if self.instances.borrow().len() == 0 {
+        if self.glyphs.borrow().len() == 0 {
             Size::ZERO
         } else {
-            let instances = self.instances.borrow();
-            let instance_origins = self.instances_origins.borrow();
+            let glyphs = self.glyphs.borrow();
 
-            let last_instance = &instances[instances.len() - 1];
-            let last_instance_origins = &instance_origins[instance_origins.len() - 1];
-            let width = last_instance_origins.0 + last_instance.size[0];
-            let height = last_instance_origins.1 + last_instance.size[1];
+            let last_glyph = &glyphs[glyphs.len() - 1];
+            let width = last_glyph.rect.x1;
+            let height = last_glyph.rect.y1;
             Size::new(width as f64, height as f64)
         }
     }
@@ -253,12 +279,12 @@ impl TextLayout for WgpuTextLayout {
             height: 0.0,
             y_offset: 0.0,
         };
-        if self.instances.borrow().len() == 0 {
+        if self.glyphs.borrow().len() == 0 {
             return Some(metric);
         }
-        let glyph_metric = &self.instances_metrics.borrow()[0];
-        metric.baseline = glyph_metric.ascent;
-        metric.height = glyph_metric.ascent - glyph_metric.descent + glyph_metric.line_gap;
+        let glyph = &self.glyphs.borrow()[0];
+        metric.baseline = glyph.metric.ascent;
+        metric.height = glyph.metric.ascent - glyph.metric.descent + glyph.metric.line_gap;
         Some(metric)
     }
 
@@ -271,18 +297,16 @@ impl TextLayout for WgpuTextLayout {
     }
 
     fn hit_test_text_position(&self, idx: usize) -> HitTestPosition {
-        if self.instances.borrow().len() == 0 {
+        if self.glyphs.borrow().len() == 0 {
             return HitTestPosition::default();
         }
 
-        let instances = self.instances.borrow();
-        let instance_origins = self.instances_origins.borrow();
+        let glyphs = self.glyphs.borrow();
 
-        let cur_instance = &instances[idx.min(instances.len() - 1)];
-        let cur_instance_origins = &instance_origins[idx.min(instance_origins.len() - 1)];
-        let mut x = cur_instance_origins.0;
-        if idx >= instances.len() {
-            x += cur_instance.size[0];
+        let cur_glyph = &glyphs[idx.min(glyphs.len() - 1)];
+        let mut x = cur_glyph.rect.x0;
+        if idx >= glyphs.len() {
+            x = cur_glyph.rect.x1;
         }
 
         let mut pos = HitTestPosition::default();
