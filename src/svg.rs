@@ -114,7 +114,7 @@ pub fn convert_path(p: &usvg::Path) -> PathConvIter {
     }
 }
 
-pub fn convert_stroke(s: &usvg::Stroke) -> (usvg::Color, StrokeOptions) {
+pub fn convert_stroke(s: &usvg::Stroke) -> (usvg::Color, usvg::Opacity, StrokeOptions) {
     let color = match s.paint {
         usvg::Paint::Color(c) => c,
         _ => FALLBACK_COLOR,
@@ -135,5 +135,5 @@ pub fn convert_stroke(s: &usvg::Stroke) -> (usvg::Color, StrokeOptions) {
         .with_line_cap(linecap)
         .with_line_join(linejoin);
 
-    (color, opt)
+    (color, s.opacity, opt)
 }

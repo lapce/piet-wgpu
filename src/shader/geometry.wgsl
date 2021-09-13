@@ -22,6 +22,8 @@ struct VertexInput {
     [[location(10)]] v_tex_pos: vec2<f32>;
     [[location(11)]] v_clip: f32;
     [[location(12)]] v_clip_rect: vec4<f32>;
+    [[location(13)]] v_transform_1: vec4<f32>;
+    [[location(14)]] v_transform_2: vec2<f32>;
 };
 
 struct VertexOutput {
@@ -36,14 +38,25 @@ struct VertexOutput {
 
 [[stage(vertex)]]
 fn main(input: VertexInput) -> VertexOutput {
+
     var out: VertexOutput;
     
     var invert_y: vec2<f32> = vec2<f32>(1.0, -1.0);
+
+    let transform = mat3x3<f32>(
+        vec3<f32>(input.v_transform_1.x, input.v_transform_1.y, 0.0),
+        vec3<f32>(input.v_transform_1.z, input.v_transform_1.w, 0.0),
+        vec3<f32>(input.v_transform_2.x, input.v_transform_2.y, 1.0),
+    );
+
+    var transformed_pos = transform * vec3<f32>(input.v_pos.x, input.v_pos.y, 1.0);
+
+    var v_pos: vec2<f32> = vec2<f32>(transformed_pos.x, transformed_pos.y);
     
-    var translated_pos: vec2<f32> = (input.v_pos * input.v_scale + input.v_translate) * globals.u_scale;
+    var translated_pos: vec2<f32> = (v_pos * input.v_scale + input.v_translate) * globals.u_scale;
     
     if (input.v_width > 0.0) {
-        translated_pos = (input.v_pos * input.v_scale + input.v_translate + input.v_normal / 2.0 * input.v_width) * globals.u_scale;
+        translated_pos = (v_pos * input.v_scale + input.v_translate + input.v_normal / 2.0 * input.v_width) * globals.u_scale;
     }
     
     var pos: vec2<f32> = (translated_pos / globals.u_resolution * 2.0 - vec2<f32>(1.0, 1.0)) * invert_y;

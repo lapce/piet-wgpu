@@ -47,6 +47,8 @@ pub struct GpuVertex {
     pub(crate) tex_pos: [f32; 2],
     pub(crate) clip: f32,
     pub(crate) clip_rect: [f32; 4],
+    pub(crate) transform_1: [f32; 4],
+    pub(crate) transform_2: [f32; 2],
 }
 
 unsafe impl bytemuck::Pod for GpuVertex {}
@@ -68,6 +70,8 @@ impl Default for GpuVertex {
             tex_pos: [0.0, 0.0],
             clip: 0.0,
             clip_rect: [0.0, 0.0, 0.0, 0.0],
+            transform_1: [1.0, 0.0, 0.0, 1.0],
+            transform_2: [0.0, 0.0],
         }
     }
 }
@@ -194,6 +198,8 @@ impl Pipeline {
                         10 => Float32x2,
                         11 => Float32,
                         12 => Float32x4,
+                        13 => Float32x4,
+                        14 => Float32x2,
                     ),
                 }],
             },
