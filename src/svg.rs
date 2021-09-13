@@ -14,10 +14,14 @@ use usvg::NodeExt;
 
 use crate::pipeline::GpuVertex;
 
+#[derive(Clone)]
 pub struct Svg {
     hash: Vec<u8>,
     pub(crate) tree: usvg::Tree,
 }
+
+unsafe impl Sync for Svg {}
+unsafe impl Send for Svg {}
 
 impl FromStr for Svg {
     type Err = Box<dyn std::error::Error>;

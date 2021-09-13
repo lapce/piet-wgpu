@@ -80,6 +80,10 @@ pub struct Pipeline {
     pub pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     globals: wgpu::Buffer,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    supported_vertices: usize,
+    supported_indices: usize,
     pub(crate) cache: Cache,
     pub(crate) size: Size,
     pub(crate) scale: f64,
@@ -93,6 +97,19 @@ impl Pipeline {
             label: Some("Globals ubo"),
             size: globals_buffer_byte_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Globals ubo"),
+            size: std::mem::size_of::<GpuVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+        let indices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Globals ubo"),
+            size: std::mem::size_of::<u32>() as u64,
+            usage: wgpu::BufferUsages::INDEX,
             mapped_at_creation: false,
         });
 
@@ -235,6 +252,10 @@ impl Pipeline {
             pipeline,
             bind_group,
             globals,
+            vertices,
+            indices,
+            supported_vertices: 1,
+            supported_indices: 1,
             cache,
             size: Size::ZERO,
             scale: 1.0,
@@ -253,17 +274,49 @@ impl Pipeline {
     ) {
         let fill_range = 0..(geometry.indices.len() as u32);
 
-        let vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&geometry.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        if geometry.vertices.len() > self.supported_vertices {
+            self.supported_vertices = geometry.vertices.len();
+            let size = std::mem::size_of::<GpuVertex>() as u64 * self.supported_vertices as u64;
+            self.vertices = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("vertices ubo"),
+                size,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if geometry.indices.len() > self.supported_indices {
+            self.supported_indices = geometry.indices.len();
+            let size = std::mem::size_of::<u32>() as u64 * self.supported_indices as u64;
+            self.indices = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("indices ubo"),
+                size,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
 
-        let ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&geometry.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        {
+            let vertices_bytes = bytemuck::cast_slice(&geometry.vertices);
+            let mut vertices = staging_belt.write_buffer(
+                encoder,
+                &self.vertices,
+                0,
+                unsafe { NonZeroU64::new_unchecked(vertices_bytes.len() as u64) },
+                device,
+            );
+            vertices.copy_from_slice(vertices_bytes);
+        }
+        {
+            let indices_bytes = bytemuck::cast_slice(&geometry.indices);
+            let mut indices = staging_belt.write_buffer(
+                encoder,
+                &self.indices,
+                0,
+                unsafe { NonZeroU64::new_unchecked(indices_bytes.len() as u64) },
+                device,
+            );
+            indices.copy_from_slice(indices_bytes);
+        }
 
         {
             let globals = vec![Globals {
@@ -298,8 +351,8 @@ impl Pipeline {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, vbo.slice(..));
-            pass.set_index_buffer(ibo.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(0, self.vertices.slice(..));
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
 
             pass.draw_indexed(fill_range.clone(), 0, 0..1);
         }
