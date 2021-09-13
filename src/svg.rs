@@ -1,12 +1,125 @@
-use std::f64::NAN;
+use std::{collections::HashMap, f64::NAN, str::FromStr};
 
 use lyon::{
-    lyon_tessellation::{BuffersBuilder, FillOptions, StrokeOptions},
+    lyon_tessellation::{
+        BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
+        StrokeVertex, VertexBuffers,
+    },
     math::{point, Point},
     path::PathEvent,
     tessellation,
 };
+use sha2::{Digest, Sha256};
 use usvg::NodeExt;
+
+use crate::pipeline::GpuVertex;
+
+pub struct Svg {
+    hash: Vec<u8>,
+    pub(crate) tree: usvg::Tree,
+}
+
+impl FromStr for Svg {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut re_opt = usvg::Options {
+            keep_named_groups: false,
+            ..usvg::Options::default()
+        };
+
+        let mut hasher = Sha256::new();
+        hasher.update(s);
+        let hash = hasher.finalize().to_vec();
+
+        re_opt.fontdb.load_system_fonts();
+
+        match usvg::Tree::from_str(s, &re_opt) {
+            Ok(tree) => Ok(Self { hash, tree }),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+pub(crate) struct SvgStore {
+    svgs: HashMap<Vec<u8>, VertexBuffers<GpuVertex, u32>>,
+    fill_tess: FillTessellator,
+    stroke_tess: StrokeTessellator,
+}
+
+impl SvgStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            svgs: HashMap::new(),
+            fill_tess: FillTessellator::new(),
+            stroke_tess: StrokeTessellator::new(),
+        }
+    }
+
+    pub(crate) fn get_geometry(&mut self, svg: &Svg) -> &VertexBuffers<GpuVertex, u32> {
+        if !self.svgs.contains_key(&svg.hash) {
+            let geometry = self.new_geometry(svg);
+            self.svgs.insert(svg.hash.clone(), geometry);
+        }
+        self.svgs.get(&svg.hash).unwrap()
+    }
+
+    fn new_geometry(&mut self, svg: &Svg) -> VertexBuffers<GpuVertex, u32> {
+        let mut geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
+        for node in svg.tree.root().descendants() {
+            if let usvg::NodeKind::Path(ref p) = *node.borrow() {
+                let t = node.transform();
+                let transform_1 = [t.a as f32, t.b as f32, t.c as f32, t.d as f32];
+                let transform_2 = [t.e as f32, t.f as f32];
+                if let Some(ref fill) = p.fill {
+                    let color = match fill.paint {
+                        usvg::Paint::Color(c) => c,
+                        _ => FALLBACK_COLOR,
+                    };
+                    let color = [
+                        color.red as f32 / 255.0,
+                        color.green as f32 / 255.0,
+                        color.blue as f32 / 255.0,
+                        fill.opacity.value() as f32,
+                    ];
+                    self.fill_tess.tessellate(
+                        convert_path(p),
+                        &FillOptions::tolerance(0.01),
+                        &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| GpuVertex {
+                            pos: vertex.position().to_array(),
+                            color,
+                            transform_1,
+                            transform_2,
+                            ..Default::default()
+                        }),
+                    );
+                }
+
+                if let Some(ref stroke) = p.stroke {
+                    let (stroke_color, stroke_opacity, stroke_opts) = convert_stroke(stroke);
+                    let color = [
+                        stroke_color.red as f32 / 255.0,
+                        stroke_color.green as f32 / 255.0,
+                        stroke_color.blue as f32 / 255.0,
+                        stroke_opacity.value() as f32,
+                    ];
+                    let _ = self.stroke_tess.tessellate(
+                        convert_path(p),
+                        &stroke_opts.with_tolerance(0.01),
+                        &mut BuffersBuilder::new(&mut geometry, |vertex: StrokeVertex| GpuVertex {
+                            pos: vertex.position().to_array(),
+                            color,
+                            transform_1,
+                            transform_2,
+                            ..Default::default()
+                        }),
+                    );
+                }
+            }
+        }
+        geometry
+    }
+}
 
 pub const FALLBACK_COLOR: usvg::Color = usvg::Color {
     red: 0,

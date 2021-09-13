@@ -9,6 +9,8 @@ mod transformation;
 pub use piet::kurbo;
 use piet::kurbo::Size;
 pub use piet::*;
+pub use svg::Svg;
+use svg::SvgStore;
 
 use std::marker::PhantomData;
 
@@ -38,6 +40,7 @@ pub struct WgpuRenderer {
     texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
     size: Size,
+    svg_store: SvgStore,
 
     text: WgpuText,
 
@@ -112,6 +115,7 @@ impl WgpuRenderer {
             texture,
             depth_view,
             pipeline,
+            svg_store: SvgStore::new(),
         })
     }
 

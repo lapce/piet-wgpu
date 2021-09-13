@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::{
     pipeline::GpuVertex,
-    svg::{convert_path, convert_stroke, FALLBACK_COLOR},
+    svg::{convert_path, convert_stroke, Svg, FALLBACK_COLOR},
     text::{WgpuText, WgpuTextLayout},
     transformation::Transformation,
     WgpuRenderer,
@@ -140,93 +140,42 @@ impl<'a> WgpuRenderContext<'a> {
         self.clip_stack.last()
     }
 
-    pub fn draw_svg(&mut self, tree: &usvg::Tree, rect: Rect, override_color: Option<&Color>) {
-        let view_box = tree.svg_node().view_box;
+    pub fn draw_svg(&mut self, svg: &Svg, rect: Rect, override_color: Option<&Color>) {
+        let view_box = svg.tree.svg_node().view_box;
         let view_rect = view_box.rect;
         let scale =
             (rect.width() / view_rect.width()).min(rect.height() / view_rect.height()) as f32;
         let scale = [scale, scale];
         let affine = self.cur_transform.as_coeffs();
         let translate = [(affine[4] + rect.x0) as f32, (affine[5] + rect.y0) as f32];
-        for node in tree.root().descendants() {
-            if let usvg::NodeKind::Path(ref p) = *node.borrow() {
-                let t = node.transform();
-                let transform_1 = [t.a as f32, t.b as f32, t.c as f32, t.d as f32];
-                let transform_2 = [t.e as f32, t.f as f32];
-                if let Some(ref fill) = p.fill {
-                    let color = match fill.paint {
-                        usvg::Paint::Color(c) => c,
-                        _ => FALLBACK_COLOR,
-                    };
-                    let color = if let Some(color) = override_color {
-                        let color = color.as_rgba();
-                        [
-                            color.0 as f32,
-                            color.1 as f32,
-                            color.2 as f32,
-                            color.3 as f32,
-                        ]
-                    } else {
-                        [
-                            color.red as f32 / 255.0,
-                            color.green as f32 / 255.0,
-                            color.blue as f32 / 255.0,
-                            fill.opacity.value() as f32,
-                        ]
-                    };
-                    self.fill_tess.tessellate(
-                        convert_path(p),
-                        &FillOptions::tolerance(0.01),
-                        &mut BuffersBuilder::new(&mut self.geometry, |vertex: FillVertex| {
-                            GpuVertex {
-                                pos: vertex.position().to_array(),
-                                translate,
-                                color,
-                                scale,
-                                transform_1,
-                                transform_2,
-                                ..Default::default()
-                            }
-                        }),
-                    );
-                }
 
-                if let Some(ref stroke) = p.stroke {
-                    let (stroke_color, stroke_opacity, stroke_opts) = convert_stroke(stroke);
-                    let color = if let Some(color) = override_color {
-                        let color = color.as_rgba();
-                        [
-                            color.0 as f32,
-                            color.1 as f32,
-                            color.2 as f32,
-                            color.3 as f32,
-                        ]
-                    } else {
-                        [
-                            stroke_color.red as f32 / 255.0,
-                            stroke_color.green as f32 / 255.0,
-                            stroke_color.blue as f32 / 255.0,
-                            stroke_opacity.value() as f32,
-                        ]
-                    };
-                    let _ = self.stroke_tess.tessellate(
-                        convert_path(p),
-                        &stroke_opts.with_tolerance(0.01),
-                        &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| {
-                            GpuVertex {
-                                pos: vertex.position().to_array(),
-                                translate,
-                                scale,
-                                color,
-                                transform_1,
-                                transform_2,
-                                ..Default::default()
-                            }
-                        }),
-                    );
+        let override_color = override_color.map(|c| {
+            let color = c.as_rgba();
+            [
+                color.0 as f32,
+                color.1 as f32,
+                color.2 as f32,
+                color.3 as f32,
+            ]
+        });
+        let geometry = self.renderer.svg_store.get_geometry(svg);
+        let offset = self.geometry.vertices.len() as u32;
+        let mut vertices = geometry
+            .vertices
+            .iter()
+            .map(|v| {
+                let mut v = v.clone();
+                v.translate = translate;
+                v.scale = scale;
+                if let Some(c) = override_color.clone() {
+                    v.color = c;
                 }
-            }
-        }
+                v
+            })
+            .collect();
+        let mut indices = geometry.indices.iter().map(|i| *i + offset).collect();
+        self.geometry.vertices.append(&mut vertices);
+        self.geometry.indices.append(&mut indices);
     }
 }
 
