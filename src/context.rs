@@ -281,6 +281,10 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             ];
             let affine = self.cur_transform.as_coeffs();
             let translate = [affine[4] as f32, affine[5] as f32];
+            let (clip, clip_rect) = self
+                .current_clip()
+                .map(|r| (1.0, [r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32]))
+                .unwrap_or((0.0, [0.0, 0.0, 0.0, 0.0]));
             self.fill_tess.tessellate_rectangle(
                 &lyon::geom::Rect::new(
                     lyon::geom::Point::new(rect.x0 as f32, rect.y0 as f32),
@@ -291,6 +295,8 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     pos: vertex.position().to_array(),
                     translate,
                     color,
+                    clip,
+                    clip_rect,
                     ..Default::default()
                 }),
             );

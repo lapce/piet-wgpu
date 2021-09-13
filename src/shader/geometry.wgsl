@@ -34,6 +34,8 @@ struct VertexOutput {
     [[location(3)]] blur_radius: f32;
     [[location(4)]] tex: f32;
     [[location(5)]] tex_pos: vec2<f32>;
+    [[location(6)]] clip: f32;
+    [[location(7)]] clip_rect: vec4<f32>;
 };
 
 [[stage(vertex)]]
@@ -68,6 +70,17 @@ fn main(input: VertexInput) -> VertexOutput {
     out.pos = input.v_pos;
     out.tex = input.v_tex;
     out.tex_pos = input.v_tex_pos;
+    out.clip = input.v_clip;
+    out.clip_rect = input.v_clip_rect;
+    
+    if (out.clip > 0.0) {
+        var left_top = vec2<f32>(input.v_clip_rect.x, input.v_clip_rect.y);
+        var left_top = left_top * globals.u_scale;
+        
+        var right_bottom = vec2<f32>(input.v_clip_rect.z, input.v_clip_rect.w);
+        var right_bottom = right_bottom * globals.u_scale;
+        out.clip_rect = vec4<f32>(left_top, right_bottom);
+    }
     
     return out;
 }
@@ -89,6 +102,7 @@ fn box_shadow(lower: vec2<f32>, upper: vec2<f32>, point: vec2<f32>, radius: f32)
 [[stage(fragment)]]
 fn main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
     var color: vec4<f32> = input.color;
+    
     if (input.blur_radius > 0.0) {
         color.w = color.w * box_shadow(
            vec2<f32>(input.rect.x, input.rect.y),
@@ -105,5 +119,12 @@ fn main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
         }
         color.w = color.w * alpha;
     }
+    
+    if (input.clip > 0.0) {
+        if (input.position.x < input.clip_rect.x || input.position.x > input.clip_rect.z || input.position.y < input.clip_rect.y || input.position.y > input.clip_rect.w) {
+            discard;
+        }
+    }
+    
     return color;
 }
