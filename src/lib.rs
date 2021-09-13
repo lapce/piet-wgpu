@@ -6,13 +6,15 @@ mod svg;
 mod text;
 mod transformation;
 
+use lyon::lyon_tessellation::{FillTessellator, StrokeTessellator};
 pub use piet::kurbo;
 use piet::kurbo::Size;
 pub use piet::*;
+use pipeline::{Cache, GlyphPosInfo};
 pub use svg::Svg;
 use svg::SvgStore;
 
-use std::marker::PhantomData;
+use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 
 use context::{WgpuImage, WgpuRenderContext};
 use text::{WgpuText, WgpuTextLayout, WgpuTextLayoutBuilder};
@@ -31,11 +33,11 @@ pub type PietImage = WgpuImage;
 
 pub struct WgpuRenderer {
     instance: wgpu::Instance,
-    device: wgpu::Device,
+    device: Rc<wgpu::Device>,
     surface: wgpu::Surface,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
-    staging_belt: wgpu::util::StagingBelt,
+    staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
     local_pool: futures::executor::LocalPool,
     texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
@@ -45,6 +47,9 @@ pub struct WgpuRenderer {
     text: WgpuText,
 
     pipeline: pipeline::Pipeline,
+    pub(crate) encoder: Rc<RefCell<Option<wgpu::CommandEncoder>>>,
+    pub(crate) fill_tess: FillTessellator,
+    pub(crate) stroke_tess: StrokeTessellator,
 }
 
 impl WgpuRenderer {
@@ -68,8 +73,6 @@ impl WgpuRenderer {
 
         let staging_belt = wgpu::util::StagingBelt::new(1024);
         let local_pool = futures::executor::LocalPool::new();
-
-        let pipeline = pipeline::Pipeline::new(&device);
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth buffer"),
@@ -100,7 +103,11 @@ impl WgpuRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
 
-        let text = WgpuText::new(&device, 1.0);
+        let staging_belt = Rc::new(RefCell::new(staging_belt));
+        let encoder = Rc::new(RefCell::new(None));
+        let device = Rc::new(device);
+        let text = WgpuText::new(device.clone(), staging_belt.clone(), encoder.clone());
+        let pipeline = pipeline::Pipeline::new(&device, &text.cache.borrow());
 
         Ok(Self {
             instance,
@@ -116,6 +123,9 @@ impl WgpuRenderer {
             depth_view,
             pipeline,
             svg_store: SvgStore::new(),
+            encoder,
+            fill_tess: FillTessellator::new(),
+            stroke_tess: StrokeTessellator::new(),
         })
     }
 
@@ -162,12 +172,27 @@ impl WgpuRenderer {
 
     pub fn set_scale(&mut self, scale: f64) {
         self.pipeline.scale = scale;
-        self.text.scale = scale;
-        self.pipeline.cache.scale = scale;
+        self.text.cache.borrow_mut().scale = scale;
     }
 
     pub fn text(&self) -> WgpuText {
         self.text.clone()
+    }
+
+    pub(crate) fn ensure_encoder(&mut self) {
+        let mut encoder = self.encoder.borrow_mut();
+        if encoder.is_none() {
+            *encoder = Some(
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("render"),
+                    }),
+            );
+        }
+    }
+
+    pub(crate) fn take_encoder(&mut self) -> wgpu::CommandEncoder {
+        self.encoder.take().unwrap()
     }
 }
 

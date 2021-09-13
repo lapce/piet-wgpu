@@ -84,13 +84,12 @@ pub struct Pipeline {
     indices: wgpu::Buffer,
     supported_vertices: usize,
     supported_indices: usize,
-    pub(crate) cache: Cache,
     pub(crate) size: Size,
     pub(crate) scale: f64,
 }
 
 impl Pipeline {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, cache: &Cache) -> Self {
         let globals_buffer_byte_size = std::mem::size_of::<Globals>() as u64;
 
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
@@ -166,7 +165,6 @@ impl Pipeline {
             ],
         });
 
-        let cache = Cache::new(device, 2000, 2000);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind group"),
             layout: &bind_group_layout,
@@ -256,7 +254,6 @@ impl Pipeline {
             indices,
             supported_vertices: 1,
             supported_indices: 1,
-            cache,
             size: Size::ZERO,
             scale: 1.0,
         }

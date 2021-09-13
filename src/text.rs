@@ -3,7 +3,8 @@ use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 use font_kit::family_name::FamilyName;
 use font_kit::source::SystemSource;
 use lyon::lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillVertex, StrokeOptions, StrokeVertex, VertexBuffers,
+    BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
+    StrokeVertex, VertexBuffers,
 };
 use lyon::tessellation;
 use piet::kurbo::Line;
@@ -15,27 +16,74 @@ use piet::{
 };
 
 use crate::context::WgpuRenderContext;
-use crate::pipeline::{GlyphMetricInfo, GlyphPosInfo, GpuVertex};
+use crate::pipeline::{Cache, GlyphMetricInfo, GlyphPosInfo, GpuVertex};
+use crate::WgpuRenderer;
 
 #[derive(Clone)]
 pub struct WgpuText {
     source: Rc<RefCell<SystemSource>>,
     glyphs: Rc<RefCell<HashMap<FontFamily, HashMap<char, Rc<(Vec<[f32; 2]>, Vec<u32>)>>>>>,
-    pub(crate) scale: f64,
+    pub(crate) cache: Rc<RefCell<Cache>>,
+    device: Rc<wgpu::Device>,
+    staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
+    encoder: Rc<RefCell<Option<wgpu::CommandEncoder>>>,
+    fill_tess: Rc<RefCell<FillTessellator>>,
+    stroke_tess: Rc<RefCell<StrokeTessellator>>,
 }
 
 impl WgpuText {
-    pub(crate) fn new(device: &wgpu::Device, scale: f64) -> Self {
+    pub(crate) fn new(
+        device: Rc<wgpu::Device>,
+        staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
+        encoder: Rc<RefCell<Option<wgpu::CommandEncoder>>>,
+    ) -> Self {
         Self {
             source: Rc::new(RefCell::new(SystemSource::new())),
             glyphs: Rc::new(RefCell::new(HashMap::new())),
-            scale,
+            cache: Rc::new(RefCell::new(Cache::new(&device, 2000, 2000))),
+            device,
+            staging_belt,
+            encoder,
+            fill_tess: Rc::new(RefCell::new(FillTessellator::new())),
+            stroke_tess: Rc::new(RefCell::new(StrokeTessellator::new())),
         }
+    }
+
+    pub(crate) fn get_glyph_pos(
+        &self,
+        c: char,
+        font_family: FontFamily,
+        font_size: f32,
+        font_weight: FontWeight,
+    ) -> Result<GlyphPosInfo, piet::Error> {
+        let mut encoder = self.encoder.borrow_mut();
+        if encoder.is_none() {
+            *encoder = Some(
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("render"),
+                    }),
+            );
+        }
+
+        let mut cache = self.cache.borrow_mut();
+        cache
+            .get_glyph_pos(
+                c,
+                font_family,
+                font_size,
+                font_weight,
+                &self.device,
+                &mut self.staging_belt.borrow_mut(),
+                encoder.as_mut().unwrap(),
+            )
+            .map(|p| p.clone())
     }
 }
 
 #[derive(Clone)]
 pub struct WgpuTextLayout {
+    state: WgpuText,
     text: String,
     attrs: Rc<Attributes>,
     ref_glyph: Rc<RefCell<GlyphPosInfo>>,
@@ -44,8 +92,9 @@ pub struct WgpuTextLayout {
 }
 
 impl WgpuTextLayout {
-    pub fn new(text: String) -> Self {
+    pub fn new(text: String, state: WgpuText) -> Self {
         Self {
+            state,
             text,
             attrs: Rc::new(Attributes::default()),
             glyphs: Rc::new(RefCell::new(Vec::new())),
@@ -58,19 +107,14 @@ impl WgpuTextLayout {
         self.attrs = Rc::new(attrs);
     }
 
-    pub fn rebuild(&self, ctx: &mut WgpuRenderContext) {
+    pub fn rebuild(&self) {
         let font_family = self.attrs.defaults.font.clone();
         let font_size = self.attrs.defaults.font_size;
         let font_weight = self.attrs.defaults.weight;
-        if let Ok(glyph_pos) = ctx.renderer.pipeline.cache.get_glyph_pos(
-            'W',
-            font_family,
-            font_size as f32,
-            font_weight,
-            &ctx.renderer.device,
-            &mut ctx.renderer.staging_belt,
-            &mut ctx.encoder.as_mut().unwrap(),
-        ) {
+        if let Ok(glyph_pos) =
+            self.state
+                .get_glyph_pos('W', font_family, font_size as f32, font_weight)
+        {
             *self.ref_glyph.borrow_mut() = glyph_pos.clone();
         }
 
@@ -94,20 +138,15 @@ impl WgpuTextLayout {
                 color.2 as f32,
                 color.3 as f32,
             ];
-            if let Ok(glyph_pos) = ctx.renderer.pipeline.cache.get_glyph_pos(
-                c,
-                font_family,
-                font_size,
-                font_weight,
-                &ctx.renderer.device,
-                &mut ctx.renderer.staging_belt,
-                &mut ctx.encoder.as_mut().unwrap(),
-            ) {
+            if let Ok(glyph_pos) = self
+                .state
+                .get_glyph_pos(c, font_family, font_size, font_weight)
+            {
                 let mut glyph_pos = glyph_pos.clone();
                 glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
 
                 let i = RefCell::new(0);
-                ctx.fill_tess.tessellate_rectangle(
+                self.state.fill_tess.borrow_mut().tessellate_rectangle(
                     &lyon::geom::Rect::new(
                         lyon::geom::Point::new(glyph_pos.rect.x0 as f32, glyph_pos.rect.y0 as f32),
                         lyon::geom::Size::new(
@@ -189,27 +228,22 @@ impl WgpuTextLayout {
 }
 
 pub struct WgpuTextLayoutBuilder {
+    state: WgpuText,
     text: String,
     attrs: Attributes,
 }
 
 impl WgpuTextLayoutBuilder {
-    pub(crate) fn new(text: impl TextStorage) -> Self {
+    pub(crate) fn new(text: impl TextStorage, state: WgpuText) -> Self {
         Self {
             text: text.as_str().to_string(),
             attrs: Default::default(),
+            state,
         }
     }
 
     fn add(&mut self, attr: TextAttribute, range: Range<usize>) {
         self.attrs.add(range, attr);
-    }
-
-    pub fn build_with_ctx(self, ctx: &mut WgpuRenderContext) -> WgpuTextLayout {
-        let mut text_layout = WgpuTextLayout::new(self.text);
-        text_layout.set_attrs(self.attrs);
-        text_layout.rebuild(ctx);
-        text_layout
     }
 }
 
@@ -226,7 +260,8 @@ impl Text for WgpuText {
     }
 
     fn new_text_layout(&mut self, text: impl piet::TextStorage) -> Self::TextLayoutBuilder {
-        Self::TextLayoutBuilder::new(text)
+        let state = self.clone();
+        Self::TextLayoutBuilder::new(text, state)
     }
 }
 
@@ -259,8 +294,10 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
     }
 
     fn build(self) -> Result<Self::Out, piet::Error> {
-        let mut text_layout = WgpuTextLayout::new(self.text);
+        let state = self.state.clone();
+        let mut text_layout = WgpuTextLayout::new(self.text, state);
         text_layout.set_attrs(self.attrs);
+        text_layout.rebuild();
         Ok(text_layout)
     }
 }

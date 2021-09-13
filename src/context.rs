@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::{
-    pipeline::GpuVertex,
+    pipeline::{Cache, GpuVertex},
     svg::{convert_path, convert_stroke, Svg, FALLBACK_COLOR},
     text::{WgpuText, WgpuTextLayout},
     transformation::Transformation,
@@ -33,7 +33,7 @@ pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
     view: wgpu::TextureView,
     frame: wgpu::SurfaceFrame,
-    pub(crate) encoder: Option<wgpu::CommandEncoder>,
+    // pub(crate) encoder: Option<wgpu::CommandEncoder>,
     msaa: wgpu::TextureView,
     pub(crate) fill_tess: FillTessellator,
     pub(crate) stroke_tess: StrokeTessellator,
@@ -119,7 +119,7 @@ impl<'a> WgpuRenderContext<'a> {
             renderer,
             view,
             frame,
-            encoder: Some(encoder),
+            // encoder: Some(encoder),
             msaa,
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
@@ -358,10 +358,11 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn finish(&mut self) -> Result<(), piet::Error> {
+        self.renderer.ensure_encoder();
         self.renderer.pipeline.draw(
             &self.renderer.device,
-            &mut self.renderer.staging_belt,
-            &mut self.encoder.as_mut().unwrap(),
+            &mut self.renderer.staging_belt.borrow_mut(),
+            &mut self.renderer.encoder.borrow_mut().as_mut().unwrap(),
             &self.view,
             &self.msaa,
             wgpu::RenderPassDepthStencilAttachment {
@@ -378,15 +379,14 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             &self.geometry,
         );
 
-        self.renderer.staging_belt.finish();
-        self.renderer
-            .queue
-            .submit(Some(self.encoder.take().unwrap().finish()));
+        self.renderer.staging_belt.borrow_mut().finish();
+        let encoder = self.renderer.take_encoder();
+        self.renderer.queue.submit(Some(encoder.finish()));
 
         self.renderer
             .local_pool
             .spawner()
-            .spawn(self.renderer.staging_belt.recall())
+            .spawn(self.renderer.staging_belt.borrow_mut().recall())
             .expect("Recall staging belt");
         self.renderer.local_pool.run_until_stalled();
 
