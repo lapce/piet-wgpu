@@ -1,12 +1,10 @@
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
-use font_kit::family_name::FamilyName;
 use font_kit::source::SystemSource;
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
     StrokeVertex, VertexBuffers,
 };
-use lyon::tessellation;
 use piet::kurbo::Line;
 use piet::Color;
 use piet::{
@@ -17,7 +15,6 @@ use piet::{
 
 use crate::context::WgpuRenderContext;
 use crate::pipeline::{Cache, GlyphMetricInfo, GlyphPosInfo, GpuVertex};
-use crate::WgpuRenderer;
 
 #[derive(Clone)]
 pub struct WgpuText {

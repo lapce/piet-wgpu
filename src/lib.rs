@@ -6,11 +6,9 @@ mod svg;
 mod text;
 mod transformation;
 
-use lyon::lyon_tessellation::{FillTessellator, StrokeTessellator};
 pub use piet::kurbo;
 use piet::kurbo::Size;
 pub use piet::*;
-use pipeline::{Cache, GlyphPosInfo};
 pub use svg::Svg;
 use svg::SvgStore;
 

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, f64::NAN, str::FromStr};
+use std::{collections::HashMap, str::FromStr};
 
 use lyon::{
     lyon_tessellation::{
