@@ -93,13 +93,19 @@ pub struct WgpuTextLayout {
 
 impl WgpuTextLayout {
     pub fn new(text: String, state: WgpuText) -> Self {
+        let char_number = text.chars().count();
+        let num_vertices = char_number * 4;
+        let num_indices = char_number * 6;
         Self {
             state,
             text,
             attrs: Rc::new(Attributes::default()),
             glyphs: Rc::new(RefCell::new(Vec::new())),
             ref_glyph: Rc::new(RefCell::new(GlyphPosInfo::default())),
-            geometry: Rc::new(RefCell::new(VertexBuffers::new())),
+            geometry: Rc::new(RefCell::new(VertexBuffers::with_capacity(
+                num_vertices,
+                num_indices,
+            ))),
         }
     }
 

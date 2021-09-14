@@ -256,6 +256,53 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     ..Default::default()
                 }),
             );
+        } else {
+            let mut builder = lyon::path::Path::builder();
+            let mut in_subpath = false;
+            for el in shape.path_elements(0.01) {
+                match el {
+                    piet::kurbo::PathEl::MoveTo(p) => {
+                        builder.begin(lyon::geom::point(p.x as f32, p.y as f32));
+                        in_subpath = true;
+                    }
+                    piet::kurbo::PathEl::LineTo(p) => {
+                        builder.line_to(lyon::geom::point(p.x as f32, p.y as f32));
+                    }
+                    piet::kurbo::PathEl::QuadTo(ctrl, to) => {
+                        builder.quadratic_bezier_to(
+                            lyon::geom::point(ctrl.x as f32, ctrl.y as f32),
+                            lyon::geom::point(to.x as f32, to.y as f32),
+                        );
+                    }
+                    piet::kurbo::PathEl::CurveTo(c1, c2, p) => {
+                        builder.cubic_bezier_to(
+                            lyon::geom::point(c1.x as f32, c1.y as f32),
+                            lyon::geom::point(c2.x as f32, c2.y as f32),
+                            lyon::geom::point(p.x as f32, p.y as f32),
+                        );
+                    }
+                    piet::kurbo::PathEl::ClosePath => {
+                        in_subpath = false;
+                        builder.close();
+                    }
+                }
+            }
+            if in_subpath {
+                builder.end(false);
+            }
+            let path = builder.build();
+            self.stroke_tess.tessellate_path(
+                &path,
+                &StrokeOptions::tolerance(0.02),
+                &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| GpuVertex {
+                    pos: vertex.position_on_path().to_array(),
+                    translate,
+                    color,
+                    normal: vertex.normal().to_array(),
+                    width: width as f32,
+                    ..Default::default()
+                }),
+            );
         }
     }
 
