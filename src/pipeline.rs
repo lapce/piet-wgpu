@@ -266,7 +266,6 @@ impl Pipeline {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         msaa: &wgpu::TextureView,
-        depth_stencil_attachment: wgpu::RenderPassDepthStencilAttachment,
         geometry: &VertexBuffers<GpuVertex, u32>,
     ) {
         let fill_range = 0..(geometry.indices.len() as u32);

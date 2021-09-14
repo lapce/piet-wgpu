@@ -39,7 +39,7 @@ pub struct WgpuRenderer {
     format: wgpu::TextureFormat,
     staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
     local_pool: futures::executor::LocalPool,
-    texture: wgpu::Texture,
+    msaa: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     size: Size,
     svg_store: SvgStore,
@@ -89,7 +89,7 @@ impl WgpuRenderer {
         });
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+        let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Multisampled frame descriptor"),
             size: wgpu::Extent3d {
                 width: 1,
@@ -102,6 +102,7 @@ impl WgpuRenderer {
             format: wgpu::TextureFormat::Bgra8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
+        let msaa = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let staging_belt = Rc::new(RefCell::new(staging_belt));
         let encoder = Rc::new(RefCell::new(None));
@@ -119,7 +120,7 @@ impl WgpuRenderer {
             format,
             staging_belt,
             local_pool,
-            texture,
+            msaa,
             depth_view,
             pipeline,
             svg_store: SvgStore::new(),
@@ -139,7 +140,7 @@ impl WgpuRenderer {
             present_mode: wgpu::PresentMode::Mailbox,
         };
         self.surface.configure(&self.device, &sc_desc);
-        self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
+        let msaa_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Multisampled frame descriptor"),
             size: wgpu::Extent3d {
                 width: size.width as u32,
@@ -152,6 +153,7 @@ impl WgpuRenderer {
             format: wgpu::TextureFormat::Bgra8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
+        self.msaa = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.pipeline.size = size;
 
         let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {

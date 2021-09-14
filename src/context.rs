@@ -33,8 +33,6 @@ pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
     view: wgpu::TextureView,
     frame: wgpu::SurfaceFrame,
-    // pub(crate) encoder: Option<wgpu::CommandEncoder>,
-    msaa: wgpu::TextureView,
     pub(crate) fill_tess: FillTessellator,
     pub(crate) stroke_tess: StrokeTessellator,
     pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
@@ -65,62 +63,36 @@ impl<'a> WgpuRenderContext<'a> {
         let text = renderer.text();
         let geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
         let frame = renderer.surface.get_current_frame().unwrap();
-        let mut encoder = renderer
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render"),
-            });
         let view = frame
             .output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Multisampled frame descriptor"),
-            size: wgpu::Extent3d {
-                width: renderer.pipeline.size.width as u32,
-                height: renderer.pipeline.size.height as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 4,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        });
-        let msaa = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
         {
-            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: true,
-                    },
-                }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &renderer.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(-1.0),
-                        store: true,
-                    }),
-                    stencil_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0),
-                        store: true,
-                    }),
-                }),
-            });
+            renderer.ensure_encoder();
+            let _ = renderer
+                .encoder
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                            store: true,
+                        },
+                    }],
+                    depth_stencil_attachment: None,
+                });
         }
 
         Self {
             renderer,
             view,
             frame,
-            // encoder: Some(encoder),
-            msaa,
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
             geometry,
@@ -411,18 +383,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             &mut self.renderer.staging_belt.borrow_mut(),
             &mut self.renderer.encoder.borrow_mut().as_mut().unwrap(),
             &self.view,
-            &self.msaa,
-            wgpu::RenderPassDepthStencilAttachment {
-                view: &self.renderer.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-                stencil_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                }),
-            },
+            &self.renderer.msaa,
             &self.geometry,
         );
 
