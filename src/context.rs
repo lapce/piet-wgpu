@@ -1,17 +1,10 @@
 use std::borrow::Cow;
 
 use crate::{
-    pipeline::{Cache, GpuVertex},
-    svg::{convert_path, convert_stroke, Svg, FALLBACK_COLOR},
+    pipeline::GpuVertex,
+    svg::Svg,
     text::{WgpuText, WgpuTextLayout},
-    transformation::Transformation,
     WgpuRenderer,
-};
-use font_kit::{
-    canvas::{Canvas, Format, RasterizationOptions},
-    family_name::FamilyName,
-    hinting::HintingOptions,
-    source::SystemSource,
 };
 use futures::task::SpawnExt;
 use lyon::lyon_tessellation::{
@@ -19,15 +12,10 @@ use lyon::lyon_tessellation::{
     StrokeVertex, VertexBuffers,
 };
 use lyon::tessellation;
-use pathfinder_geometry::{
-    transform2d::Transform2F,
-    vector::{Vector2F, Vector2I},
-};
 use piet::{
     kurbo::{Affine, Point, Rect, Shape, Size, Vec2},
     Color, FontFamily, Image, IntoBrush, RenderContext,
 };
-use usvg::NodeExt;
 
 pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
@@ -36,7 +24,6 @@ pub struct WgpuRenderContext<'a> {
     pub(crate) fill_tess: FillTessellator,
     pub(crate) stroke_tess: StrokeTessellator,
     pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
-    elements: Vec<Element>,
     inner_text: WgpuText,
     pub(crate) cur_transform: Affine,
     state_stack: Vec<State>,
@@ -52,10 +39,6 @@ struct State {
     /// This invariant should hold: transform * rel_transform = cur_transform
     transform: Affine,
     n_clip: usize,
-}
-
-enum Element {
-    Fill(Rect, Color, Affine, Rect),
 }
 
 impl<'a> WgpuRenderContext<'a> {
@@ -96,7 +79,6 @@ impl<'a> WgpuRenderContext<'a> {
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
             geometry,
-            elements: Vec::new(),
             inner_text: text,
             cur_transform: Affine::default(),
             state_stack: Vec::new(),

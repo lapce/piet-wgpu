@@ -48,8 +48,6 @@ pub struct WgpuRenderer {
 
     pipeline: pipeline::Pipeline,
     pub(crate) encoder: Rc<RefCell<Option<wgpu::CommandEncoder>>>,
-    pub(crate) fill_tess: FillTessellator,
-    pub(crate) stroke_tess: StrokeTessellator,
 }
 
 impl WgpuRenderer {
@@ -125,8 +123,6 @@ impl WgpuRenderer {
             pipeline,
             svg_store: SvgStore::new(),
             encoder,
-            fill_tess: FillTessellator::new(),
-            stroke_tess: StrokeTessellator::new(),
         })
     }
 
