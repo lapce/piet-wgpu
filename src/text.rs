@@ -159,47 +159,56 @@ impl WgpuTextLayout {
                     }
                 }
 
-                let i = RefCell::new(0);
-                self.state.fill_tess.borrow_mut().tessellate_rectangle(
-                    &lyon::geom::Rect::new(
-                        lyon::geom::Point::new(glyph_pos.rect.x0 as f32, glyph_pos.rect.y0 as f32),
-                        lyon::geom::Size::new(
-                            glyph_pos.rect.width() as f32,
-                            glyph_pos.rect.height() as f32,
-                        ),
-                    ),
-                    &FillOptions::tolerance(0.1).with_fill_rule(lyon::path::FillRule::NonZero),
-                    &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| {
-                        let tex_pos = match *i.borrow() {
-                            0 => [
-                                glyph_pos.cache_rect.x0 as f32,
-                                glyph_pos.cache_rect.y0 as f32,
-                            ],
-                            1 => [
-                                glyph_pos.cache_rect.x0 as f32,
-                                glyph_pos.cache_rect.y1 as f32,
-                            ],
-                            2 => [
-                                glyph_pos.cache_rect.x1 as f32,
-                                glyph_pos.cache_rect.y1 as f32,
-                            ],
-                            3 => [
-                                glyph_pos.cache_rect.x1 as f32,
-                                glyph_pos.cache_rect.y0 as f32,
-                            ],
-                            _ => [0.0, 0.0],
-                        };
-                        *i.borrow_mut() += 1;
-                        GpuVertex {
-                            pos: vertex.position().to_array(),
-                            tex: 1.0,
-                            tex_pos,
-                            color,
-                            ..Default::default()
-                        }
-                    }),
-                );
-                *i.borrow_mut() = 0;
+                if c == ' ' || c == '\n' {
+                    x = new_x;
+                    glyphs.push(glyph_pos);
+                    continue;
+                }
+
+                let rect = &glyph_pos.rect;
+                let cache_rect = &glyph_pos.cache_rect;
+                let mut vertices = vec![
+                    GpuVertex {
+                        pos: [rect.x0 as f32, rect.y0 as f32],
+                        tex: 1.0,
+                        tex_pos: [cache_rect.x0 as f32, cache_rect.y0 as f32],
+                        color,
+                        ..Default::default()
+                    },
+                    GpuVertex {
+                        pos: [rect.x0 as f32, rect.y1 as f32],
+                        tex: 1.0,
+                        tex_pos: [cache_rect.x0 as f32, cache_rect.y1 as f32],
+                        color,
+                        ..Default::default()
+                    },
+                    GpuVertex {
+                        pos: [rect.x1 as f32, rect.y1 as f32],
+                        tex: 1.0,
+                        tex_pos: [cache_rect.x1 as f32, cache_rect.y1 as f32],
+                        color,
+                        ..Default::default()
+                    },
+                    GpuVertex {
+                        pos: [rect.x1 as f32, rect.y0 as f32],
+                        tex: 1.0,
+                        tex_pos: [cache_rect.x1 as f32, cache_rect.y0 as f32],
+                        color,
+                        ..Default::default()
+                    },
+                ];
+                let offset = geometry.vertices.len() as u32;
+                let mut indices = vec![
+                    offset + 0,
+                    offset + 1,
+                    offset + 2,
+                    offset + 0,
+                    offset + 2,
+                    offset + 3,
+                ];
+
+                geometry.vertices.append(&mut vertices);
+                geometry.indices.append(&mut indices);
 
                 x = new_x;
                 glyphs.push(glyph_pos);
