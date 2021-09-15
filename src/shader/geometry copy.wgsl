@@ -9,7 +9,6 @@ struct Primitive {
     u_width: f32;
     u_clip: f32;
     u_blur_radius: f32;
-    pad: f32;
 };
 
 [[block]]
@@ -51,7 +50,7 @@ struct VertexOutput {
 
 [[stage(vertex)]]
 fn main(input: VertexInput) -> VertexOutput {
-    let primitive = primitives.data[input.v_primitive_id];
+    var primitive = primitives.data[input.v_primitive_id];
 
     var out: VertexOutput;
     

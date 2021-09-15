@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, f64::NAN, str::FromStr};
 
 use lyon::{
     lyon_tessellation::{
@@ -45,8 +45,18 @@ impl FromStr for Svg {
     }
 }
 
+pub(crate) struct Transform {
+    data1: [f32; 4],
+    data2: [f32; 2],
+}
+
+pub(crate) struct SvgData {
+    pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
+    pub(crate) transforms: Vec<Transform>,
+}
+
 pub(crate) struct SvgStore {
-    svgs: HashMap<Vec<u8>, VertexBuffers<GpuVertex, u32>>,
+    svgs: HashMap<Vec<u8>, SvgData>,
     fill_tess: FillTessellator,
     stroke_tess: StrokeTessellator,
 }
@@ -60,21 +70,36 @@ impl SvgStore {
         }
     }
 
-    pub(crate) fn get_geometry(&mut self, svg: &Svg) -> &VertexBuffers<GpuVertex, u32> {
+    pub(crate) fn get_svg_data(&mut self, svg: &Svg) -> &SvgData {
         if !self.svgs.contains_key(&svg.hash) {
-            let geometry = self.new_geometry(svg);
-            self.svgs.insert(svg.hash.clone(), geometry);
+            let data = self.new_svg_data(svg);
+            self.svgs.insert(svg.hash.clone(), data);
         }
         self.svgs.get(&svg.hash).unwrap()
     }
 
-    fn new_geometry(&mut self, svg: &Svg) -> VertexBuffers<GpuVertex, u32> {
+    fn new_svg_data(&mut self, svg: &Svg) -> SvgData {
+        let mut prev_transform = usvg::Transform {
+            a: NAN,
+            b: NAN,
+            c: NAN,
+            d: NAN,
+            e: NAN,
+            f: NAN,
+        };
         let mut geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
+        let mut transforms = Vec::new();
         for node in svg.tree.root().descendants() {
             if let usvg::NodeKind::Path(ref p) = *node.borrow() {
                 let t = node.transform();
-                let transform_1 = [t.a as f32, t.b as f32, t.c as f32, t.d as f32];
-                let transform_2 = [t.e as f32, t.f as f32];
+                if t != prev_transform {
+                    println!("new transfrom");
+                    transforms.push(Transform {
+                        data1: [t.a as f32, t.b as f32, t.c as f32, t.d as f32],
+                        data2: [t.e as f32, t.f as f32],
+                    });
+                    prev_transform = t;
+                }
                 if let Some(ref fill) = p.fill {
                     let color = match fill.paint {
                         usvg::Paint::Color(c) => c,
@@ -92,8 +117,7 @@ impl SvgStore {
                         &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| GpuVertex {
                             pos: vertex.position().to_array(),
                             color,
-                            transform_1,
-                            transform_2,
+                            primitive_id: transforms.len() as u32 - 1,
                             ..Default::default()
                         }),
                     );
@@ -113,15 +137,17 @@ impl SvgStore {
                         &mut BuffersBuilder::new(&mut geometry, |vertex: StrokeVertex| GpuVertex {
                             pos: vertex.position().to_array(),
                             color,
-                            transform_1,
-                            transform_2,
+                            primitive_id: transforms.len() as u32 - 1,
                             ..Default::default()
                         }),
                     );
                 }
             }
         }
-        geometry
+        SvgData {
+            geometry,
+            transforms,
+        }
     }
 }
 

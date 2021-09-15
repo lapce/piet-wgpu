@@ -211,8 +211,6 @@ impl WgpuTextLayout {
             .map(|v| {
                 let mut v = v.clone();
                 v.translate = translate;
-                v.clip = clip;
-                v.clip_rect = clip_rect;
                 v
             })
             .collect();
