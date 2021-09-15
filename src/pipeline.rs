@@ -38,13 +38,10 @@ pub struct Primitive {
     pub(crate) transform_1: [f32; 4],
     pub(crate) blur_rect: [f32; 4],
     pub(crate) transform_2: [f32; 2],
-    pub(crate) normal: [f32; 2],
     pub(crate) translate: [f32; 2],
     pub(crate) scale: [f32; 2],
-    pub(crate) width: f32,
     pub(crate) clip: f32,
     pub(crate) blur_radius: f32,
-    pub(crate) _pad: f32,
 }
 
 unsafe impl bytemuck::Pod for Primitive {}
@@ -59,11 +56,8 @@ impl Default for Primitive {
             clip_rect: [0.0, 0.0, 0.0, 0.0],
             transform_1: [1.0, 0.0, 0.0, 1.0],
             transform_2: [0.0, 0.0],
-            normal: [0.0, 0.0],
-            width: 0.0,
             blur_rect: [0.0, 0.0, 0.0, 0.0],
             blur_radius: 0.0,
-            _pad: 0.0,
         }
     }
 }

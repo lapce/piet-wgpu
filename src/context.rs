@@ -116,10 +116,15 @@ impl<'a> WgpuRenderContext<'a> {
         let view_rect = view_box.rect;
         let scale =
             (rect.width() / view_rect.width()).min(rect.height() / view_rect.height()) as f32;
-        let scale = [scale, scale];
-        let affine = self.cur_transform.as_coeffs();
-        let translate = [(affine[4] + rect.x0) as f32, (affine[5] + rect.y0) as f32];
 
+        self.add_primitive();
+        let primitive_id = self.primitives.len() as u32 - 1;
+        let primitive = self.primitives.last_mut().unwrap();
+        primitive.transform_1[0] *= scale;
+        primitive.transform_1[3] *= scale;
+        self.add_primitive();
+
+        let translate = [rect.x0 as f32, rect.y0 as f32];
         let override_color = override_color.map(|c| {
             let color = c.as_rgba();
             [
@@ -138,6 +143,7 @@ impl<'a> WgpuRenderContext<'a> {
             .map(|v| {
                 let mut v = v.clone();
                 v.translate = translate;
+                v.primitive_id = primitive_id;
                 if let Some(c) = override_color.clone() {
                     v.color = c;
                 }

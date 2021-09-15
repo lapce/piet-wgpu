@@ -93,7 +93,7 @@ impl SvgStore {
             if let usvg::NodeKind::Path(ref p) = *node.borrow() {
                 let t = node.transform();
                 if t != prev_transform {
-                    println!("new transfrom");
+                    println!("new transfrom {:?}", t);
                     transforms.push(Transform {
                         data1: [t.a as f32, t.b as f32, t.c as f32, t.d as f32],
                         data2: [t.e as f32, t.f as f32],

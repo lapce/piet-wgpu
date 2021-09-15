@@ -3,13 +3,10 @@ struct Primitive {
     u_transform_1: vec4<f32>;
     u_blur_rect: vec4<f32>;
     u_transform_2: vec2<f32>;
-    u_normal: vec2<f32>;
     u_translate: vec2<f32>;
     u_scale: vec2<f32>;
-    u_width: f32;
     u_clip: f32;
     u_blur_radius: f32;
-    pad: f32;
 };
 
 [[block]]
@@ -20,7 +17,7 @@ struct Globals {
 
 [[block]]
 struct Primitives {
-    data: [[stride(96)]] array<Primitive>;
+    data: array<Primitive>;
 };
 
 [[group(0), binding(0)]] var<uniform> globals: Globals;
@@ -68,10 +65,6 @@ fn main(input: VertexInput) -> VertexOutput {
     var v_pos: vec2<f32> = vec2<f32>(transformed_pos.x, transformed_pos.y);
     
     var translated_pos: vec2<f32> = (v_pos * primitive.u_scale + primitive.u_translate + input.v_translate) * globals.u_scale;
-    
-    if (primitive.u_width > 0.0) {
-        translated_pos = (v_pos * primitive.u_scale + primitive.u_translate + input.v_translate + primitive.u_normal / 2.0 * primitive.u_width) * globals.u_scale;
-    }
     
     var pos: vec2<f32> = (translated_pos / globals.u_resolution * 2.0 - vec2<f32>(1.0, 1.0)) * invert_y;
     
