@@ -147,6 +147,17 @@ impl WgpuTextLayout {
             {
                 let mut glyph_pos = glyph_pos.clone();
                 glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
+                let new_x = x + glyph_pos.rect.width() as f32;
+                if let Some(bounds) = bounds.as_ref() {
+                    if x > bounds[1] as f32 {
+                        return;
+                    }
+                    if new_x < bounds[0] as f32 {
+                        x = new_x;
+                        glyphs.push(glyph_pos);
+                        continue;
+                    }
+                }
 
                 let i = RefCell::new(0);
                 self.state.fill_tess.borrow_mut().tessellate_rectangle(
@@ -190,15 +201,7 @@ impl WgpuTextLayout {
                 );
                 *i.borrow_mut() = 0;
 
-                x += glyph_pos.rect.width() as f32;
-                if let Some(bounds) = bounds.as_ref() {
-                    if x > bounds[1] as f32 {
-                        return;
-                    }
-                    if x < bounds[0] as f32 {
-                        continue;
-                    }
-                }
+                x = new_x;
                 glyphs.push(glyph_pos);
             }
         }
