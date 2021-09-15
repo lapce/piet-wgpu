@@ -110,7 +110,7 @@ impl WgpuTextLayout {
         self.attrs = Rc::new(attrs);
     }
 
-    pub fn rebuild(&self) {
+    pub(crate) fn rebuild(&self) {
         let font_family = self.attrs.defaults.font.clone();
         let font_size = self.attrs.defaults.font_size;
         let font_weight = self.attrs.defaults.weight;
