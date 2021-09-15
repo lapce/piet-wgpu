@@ -110,7 +110,7 @@ impl WgpuTextLayout {
         self.attrs = Rc::new(attrs);
     }
 
-    pub(crate) fn rebuild(&self) {
+    pub(crate) fn rebuild(&self, bounds: Option<[f64; 2]>) {
         let font_family = self.attrs.defaults.font.clone();
         let font_size = self.attrs.defaults.font_size;
         let font_weight = self.attrs.defaults.weight;
@@ -191,6 +191,14 @@ impl WgpuTextLayout {
                 *i.borrow_mut() = 0;
 
                 x += glyph_pos.rect.width() as f32;
+                if let Some(bounds) = bounds.as_ref() {
+                    if x > bounds[1] as f32 {
+                        return;
+                    }
+                    if x < bounds[0] as f32 {
+                        continue;
+                    }
+                }
                 glyphs.push(glyph_pos);
             }
         }
@@ -241,6 +249,14 @@ impl WgpuTextLayoutBuilder {
 
     fn add(&mut self, attr: TextAttribute, range: Range<usize>) {
         self.attrs.add(range, attr);
+    }
+
+    pub fn build_with_bounds(self, bounds: [f64; 2]) -> WgpuTextLayout {
+        let state = self.state.clone();
+        let mut text_layout = WgpuTextLayout::new(self.text, state);
+        text_layout.set_attrs(self.attrs);
+        text_layout.rebuild(Some(bounds));
+        text_layout
     }
 }
 
@@ -294,7 +310,7 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
         let state = self.state.clone();
         let mut text_layout = WgpuTextLayout::new(self.text, state);
         text_layout.set_attrs(self.attrs);
-        text_layout.rebuild();
+        text_layout.rebuild(None);
         Ok(text_layout)
     }
 }
