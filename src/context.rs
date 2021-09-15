@@ -28,7 +28,7 @@ pub struct WgpuRenderContext<'a> {
     pub(crate) cur_transform: Affine,
     state_stack: Vec<State>,
     clip_stack: Vec<Rect>,
-    primitives: Vec<Primitive>,
+    pub(crate) primitives: Vec<Primitive>,
 }
 
 #[derive(Default)]
@@ -370,14 +370,9 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<piet::kurbo::Point>) {
-        let affine = self.cur_transform.as_coeffs();
         let point: Point = pos.into();
-        let translate = [(affine[4] + point.x) as f32, (affine[5] + point.y) as f32];
-        let (clip, clip_rect) = self
-            .current_clip()
-            .map(|r| (1.0, [r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32]))
-            .unwrap_or((0.0, [0.0, 0.0, 0.0, 0.0]));
-        layout.draw_text(self, translate, clip, clip_rect);
+        let translate = [point.x as f32, point.y as f32];
+        layout.draw_text(self, translate);
     }
 
     fn save(&mut self) -> Result<(), piet::Error> {

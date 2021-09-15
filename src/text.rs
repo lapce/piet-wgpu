@@ -196,21 +196,17 @@ impl WgpuTextLayout {
         }
     }
 
-    pub(crate) fn draw_text(
-        &self,
-        ctx: &mut WgpuRenderContext,
-        translate: [f32; 2],
-        clip: f32,
-        clip_rect: [f32; 4],
-    ) {
+    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, translate: [f32; 2]) {
         let offset = ctx.geometry.vertices.len() as u32;
         let geometry = self.geometry.borrow();
+        let primivite_id = (ctx.primitives.len() - 1) as u32;
         let mut vertices = geometry
             .vertices
             .iter()
             .map(|v| {
                 let mut v = v.clone();
                 v.translate = translate;
+                v.primitive_id = primivite_id;
                 v
             })
             .collect();
