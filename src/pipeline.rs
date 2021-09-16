@@ -428,6 +428,7 @@ pub(crate) struct GlyphMetricInfo {
     pub(crate) ascent: f64,
     pub(crate) descent: f64,
     pub(crate) line_gap: f64,
+    pub(crate) mono: bool,
 }
 
 #[derive(Default, Clone)]
@@ -611,6 +612,7 @@ impl Cache {
             ascent: (font_metrics.ascent / units_per_em * font_size as f32) as f64 / scale,
             descent: (font_metrics.descent / units_per_em * font_size as f32) as f64 / scale,
             line_gap: (font_metrics.line_gap / units_per_em * font_size as f32) as f64 / scale,
+            mono: font.is_monospace(),
         };
         let mut glyph_rect = Size::new(glyph_width as f64, glyph_height as f64).to_rect();
 
@@ -719,16 +721,6 @@ impl Cache {
         let (row, index) = self.glyphs.get(&glyph).unwrap();
         let row = self.rows.get(row).unwrap();
         Ok(&row.glyphs[*index])
-    }
-
-    pub(crate) fn is_font_mono(
-        &mut self,
-        family: FontFamily,
-        weight: FontWeight,
-    ) -> Result<bool, piet::Error> {
-        let font_id = self.get_font_by_family(family, weight)?;
-        let font = &self.fonts[font_id];
-        Ok(font.is_monospace())
     }
 
     fn get_font_by_family(

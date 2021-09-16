@@ -47,15 +47,6 @@ impl WgpuText {
         }
     }
 
-    fn is_mono(
-        &self,
-        font_family: FontFamily,
-        font_weight: FontWeight,
-    ) -> Result<bool, piet::Error> {
-        let mut cache = self.cache.borrow_mut();
-        cache.is_font_mono(font_family, font_weight)
-    }
-
     pub(crate) fn get_glyph_pos(
         &self,
         c: char,
@@ -131,10 +122,7 @@ impl WgpuTextLayout {
             *self.ref_glyph.borrow_mut() = glyph_pos.clone();
         }
 
-        let is_mono = self
-            .state
-            .is_mono(font_family.clone(), font_weight)
-            .unwrap_or(false);
+        let is_mono = self.ref_glyph.borrow().metric.mono;
         let mono_width = self.ref_glyph.borrow().rect.width();
 
         let mut glyphs = self.glyphs.borrow_mut();
