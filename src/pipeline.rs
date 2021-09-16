@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::sync::Arc;
 
 use font_kit::canvas::{Canvas, Format, RasterizationOptions};
 use font_kit::family_name::FamilyName;
 use font_kit::font::Font;
 use font_kit::hinting::HintingOptions;
+use font_kit::loader::Loader;
 use font_kit::source::SystemSource;
+use include_dir::include_dir;
+use include_dir::Dir;
 use linked_hash_map::LinkedHashMap;
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, FillVertexConstructor,
@@ -19,6 +23,8 @@ use piet::kurbo::{Affine, Point, Rect, Size};
 use piet::{Color, FontFamily, FontWeight};
 use rustc_hash::{FxHashMap, FxHasher};
 use wgpu::util::DeviceExt;
+
+const FONTS_DIR: Dir = include_dir!("./fonts");
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -450,11 +456,25 @@ pub struct Cache {
     height: u32,
 
     font_source: SystemSource,
-    fonts: FxHashMap<(FontFamily, FontWeight), Font>,
-    font_ids: FxHashMap<(FontFamily, FontWeight), usize>,
+    fonts: Vec<Font>,
+    fallback_fonts_range: std::ops::Range<usize>,
+    fallback_fonts_loaded: bool,
+    font_families: FxHashMap<(FontFamily, FontWeight), usize>,
+
     rows: LinkedHashMap<usize, Row, FxBuildHasher>,
     glyphs: FxHashMap<GlyphInfo, (usize, usize)>,
+    glyph_infos: FxHashMap<(char, FontFamily, FontWeight), (usize, u32)>,
     pub(crate) scale: f64,
+}
+
+fn get_fallback_fonts() -> Vec<Font> {
+    let mut fonts = Vec::new();
+    for file in FONTS_DIR.files() {
+        if let Ok(font) = Font::from_bytes(Arc::new(file.contents().to_vec()), 0) {
+            fonts.push(font);
+        }
+    }
+    fonts
 }
 
 impl Cache {
@@ -493,12 +513,70 @@ impl Cache {
             height,
 
             font_source: SystemSource::new(),
-            fonts: HashMap::default(),
-            font_ids: HashMap::default(),
+
+            font_families: HashMap::default(),
+            fonts: Vec::new(),
+            fallback_fonts_range: 0..0,
+            fallback_fonts_loaded: false,
+
             rows: LinkedHashMap::default(),
             glyphs: HashMap::default(),
+            glyph_infos: HashMap::default(),
             scale: 1.0,
         }
+    }
+
+    fn get_glyph_from_fallback_fonts(&mut self, c: char) -> Option<(usize, u32)> {
+        if !self.fallback_fonts_loaded {
+            self.fallback_fonts_loaded = true;
+            let mut fallback_fonts = get_fallback_fonts();
+            let start = self.fonts.len();
+            let end = start + fallback_fonts.len();
+            self.fonts.append(&mut fallback_fonts);
+            self.fallback_fonts_range = start..end;
+        }
+        if self.fallback_fonts_range.clone().count() == 0 {
+            return None;
+        }
+
+        for font_id in self.fallback_fonts_range.clone() {
+            let font = &self.fonts[font_id];
+            if let Some(glyph_id) = font.glyph_for_char(c) {
+                return Some((font_id, glyph_id));
+            }
+        }
+        None
+    }
+
+    fn get_glyph_info(
+        &mut self,
+        c: char,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+        font_size: u32,
+    ) -> Result<GlyphInfo, piet::Error> {
+        let key = (c, font_family.clone(), font_weight);
+        if !self.glyph_infos.contains_key(&key) {
+            let font_id = self.get_font_by_family(font_family.clone(), font_weight)?;
+            let font = &self.fonts[font_id];
+
+            let (font_id, glyph_id) = if let Some(glyph_id) = font.glyph_for_char(c) {
+                (font_id, glyph_id)
+            } else {
+                self.get_glyph_from_fallback_fonts(c)
+                    .ok_or(piet::Error::MissingFont)?
+            };
+
+            self.glyph_infos.insert(key.clone(), (font_id, glyph_id));
+        }
+
+        let (font_id, glyph_id) = self.glyph_infos.get(&key).unwrap();
+
+        Ok(GlyphInfo {
+            font_id: *font_id,
+            font_size,
+            glyph_id: *glyph_id,
+        })
     }
 
     pub(crate) fn get_glyph_pos(
@@ -514,23 +592,18 @@ impl Cache {
         let scale = self.scale * 2.0;
 
         let font_size = (font_size as f64 * scale).round() as u32;
-        let (font, font_id) = self.get_font(font_family.clone(), font_weight)?;
-        let glyph_id = font.glyph_for_char(c).ok_or(piet::Error::MissingFont)?;
-        let glyph = GlyphInfo {
-            font_id,
-            glyph_id,
-            font_size,
-        };
+        let glyph = self.get_glyph_info(c, font_family.clone(), font_weight, font_size)?;
 
         if let Some((row, index)) = self.glyphs.get(&glyph) {
             let row = self.rows.get(row).unwrap();
             return Ok(&row.glyphs[*index]);
         }
 
-        let (font, font_id) = self.get_font(font_family, font_weight)?;
+        let font = &self.fonts[glyph.font_id];
         let font_metrics = font.metrics();
         let units_per_em = font_metrics.units_per_em as f32;
-        let glyph_width = font.advance(glyph_id).unwrap().x() / units_per_em * font_size as f32;
+        let glyph_width =
+            font.advance(glyph.glyph_id).unwrap().x() / units_per_em * font_size as f32;
         let glyph_height = (font_metrics.ascent - font_metrics.descent + font_metrics.line_gap)
             / units_per_em
             * font_size as f32;
@@ -547,7 +620,7 @@ impl Cache {
         );
         font.rasterize_glyph(
             &mut canvas,
-            glyph_id,
+            glyph.glyph_id,
             font_size as f32,
             Transform2F::from_translation(Vector2F::new(
                 0.0,
@@ -648,21 +721,30 @@ impl Cache {
         Ok(&row.glyphs[*index])
     }
 
-    fn get_font(
+    pub(crate) fn is_font_mono(
         &mut self,
         family: FontFamily,
         weight: FontWeight,
-    ) -> Result<(&Font, usize), piet::Error> {
-        if !self.fonts.contains_key(&(family.clone(), weight)) {
+    ) -> Result<bool, piet::Error> {
+        let font_id = self.get_font_by_family(family, weight)?;
+        let font = &self.fonts[font_id];
+        Ok(font.is_monospace())
+    }
+
+    fn get_font_by_family(
+        &mut self,
+        family: FontFamily,
+        weight: FontWeight,
+    ) -> Result<usize, piet::Error> {
+        if !self.font_families.contains_key(&(family.clone(), weight)) {
             let font = self.get_new_font(&family, weight)?;
-            self.fonts.insert((family.clone(), weight), font);
-            self.font_ids
-                .insert((family.clone(), weight), self.font_ids.len());
+            let font_id = self.fonts.len();
+            self.font_families.insert((family.clone(), weight), font_id);
+            self.fonts.push(font);
         }
-        Ok((
-            self.fonts.get(&(family.clone(), weight)).unwrap(),
-            *self.font_ids.get(&(family.clone(), weight)).unwrap(),
-        ))
+
+        let font_id = self.font_families.get(&(family.clone(), weight)).unwrap();
+        Ok(*font_id)
     }
 
     fn get_new_font(&self, family: &FontFamily, weight: FontWeight) -> Result<Font, piet::Error> {
@@ -699,6 +781,10 @@ impl Cache {
     ) {
         let width = size[0] as usize;
         let height = size[1] as usize;
+
+        if width == 0 || height == 0 {
+            return;
+        }
 
         // It is a webgpu requirement that:
         //  BufferCopyView.layout.bytes_per_row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT == 0

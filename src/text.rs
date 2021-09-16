@@ -12,6 +12,7 @@ use piet::{
     FontFamily, FontStyle, FontWeight, HitTestPoint, HitTestPosition, LineMetric, Text,
     TextAttribute, TextLayout, TextLayoutBuilder, TextStorage,
 };
+use unicode_width::UnicodeWidthChar;
 
 use crate::context::WgpuRenderContext;
 use crate::pipeline::{Cache, GlyphMetricInfo, GlyphPosInfo, GpuVertex};
@@ -44,6 +45,15 @@ impl WgpuText {
             fill_tess: Rc::new(RefCell::new(FillTessellator::new())),
             stroke_tess: Rc::new(RefCell::new(StrokeTessellator::new())),
         }
+    }
+
+    fn is_mono(
+        &self,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+    ) -> Result<bool, piet::Error> {
+        let mut cache = self.cache.borrow_mut();
+        cache.is_font_mono(font_family, font_weight)
     }
 
     pub(crate) fn get_glyph_pos(
@@ -116,10 +126,16 @@ impl WgpuTextLayout {
         let font_weight = self.attrs.defaults.weight;
         if let Ok(glyph_pos) =
             self.state
-                .get_glyph_pos('W', font_family, font_size as f32, font_weight)
+                .get_glyph_pos('W', font_family.clone(), font_size as f32, font_weight)
         {
             *self.ref_glyph.borrow_mut() = glyph_pos.clone();
         }
+
+        let is_mono = self
+            .state
+            .is_mono(font_family.clone(), font_weight)
+            .unwrap_or(false);
+        let mono_width = self.ref_glyph.borrow().rect.width();
 
         let mut glyphs = self.glyphs.borrow_mut();
         glyphs.clear();
@@ -147,7 +163,11 @@ impl WgpuTextLayout {
             {
                 let mut glyph_pos = glyph_pos.clone();
                 glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
-                let new_x = x + glyph_pos.rect.width() as f32;
+                let new_x = if is_mono {
+                    x + UnicodeWidthChar::width(c).unwrap_or(1) as f32 * mono_width as f32
+                } else {
+                    x + glyph_pos.rect.width() as f32
+                };
                 if let Some(bounds) = bounds.as_ref() {
                     if x > bounds[1] as f32 {
                         return;
