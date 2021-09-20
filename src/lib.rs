@@ -38,7 +38,6 @@ pub struct WgpuRenderer {
     staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
     local_pool: futures::executor::LocalPool,
     msaa: wgpu::TextureView,
-    depth_view: wgpu::TextureView,
     size: Size,
     svg_store: SvgStore,
 
@@ -69,21 +68,6 @@ impl WgpuRenderer {
 
         let staging_belt = wgpu::util::StagingBelt::new(1024);
         let local_pool = futures::executor::LocalPool::new();
-
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Depth buffer"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        });
-        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Multisampled frame descriptor"),
@@ -117,7 +101,6 @@ impl WgpuRenderer {
             staging_belt,
             local_pool,
             msaa,
-            depth_view,
             pipeline,
             svg_store: SvgStore::new(),
             encoder,
@@ -149,21 +132,6 @@ impl WgpuRenderer {
         });
         self.msaa = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.pipeline.size = size;
-
-        let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Depth buffer"),
-            size: wgpu::Extent3d {
-                width: size.width as u32,
-                height: size.height as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        });
-        self.depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
 
     pub fn set_scale(&mut self, scale: f64) {
