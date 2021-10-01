@@ -83,6 +83,7 @@ impl WgpuText {
 pub struct WgpuTextLayout {
     state: WgpuText,
     text: String,
+    width: f64,
     attrs: Rc<Attributes>,
     ref_glyph: Rc<RefCell<GlyphPosInfo>>,
     glyphs: Rc<RefCell<Vec<GlyphPosInfo>>>,
@@ -97,6 +98,7 @@ impl WgpuTextLayout {
         Self {
             state,
             text,
+            width: f64::MAX,
             attrs: Rc::new(Attributes::default()),
             glyphs: Rc::new(RefCell::new(Vec::new())),
             ref_glyph: Rc::new(RefCell::new(GlyphPosInfo::default())),
@@ -105,6 +107,10 @@ impl WgpuTextLayout {
                 num_indices,
             ))),
         }
+    }
+
+    fn set_width(&mut self, width: f64) {
+        self.width = width;
     }
 
     fn set_attrs(&mut self, attrs: Attributes) {
@@ -133,6 +139,7 @@ impl WgpuTextLayout {
 
         let mut x = 0.0;
         let mut y = 0.0;
+        let mut max_height = 0.0;
         for (index, c) in self.text.chars().enumerate() {
             let font_family = self.attrs.font(index);
             let font_size = self.attrs.size(index) as f32;
@@ -150,12 +157,27 @@ impl WgpuTextLayout {
                 .get_glyph_pos(c, font_family, font_size, font_weight)
             {
                 let mut glyph_pos = glyph_pos.clone();
-                glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
-                let new_x = if is_mono {
-                    x + UnicodeWidthChar::width(c).unwrap_or(1) as f32 * mono_width as f32
+
+                let width = if is_mono {
+                    UnicodeWidthChar::width(c).unwrap_or(1) as f32 * mono_width as f32
                 } else {
-                    x + glyph_pos.rect.width() as f32
+                    glyph_pos.rect.width() as f32
                 };
+
+                if (x + width) as f64 > self.width {
+                    x = 0.0;
+                    y += max_height;
+                }
+
+                glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
+
+                let new_x = x + width;
+
+                let height = glyph_pos.rect.height() as f32;
+                if height > max_height {
+                    max_height = height;
+                }
+
                 if let Some(bounds) = bounds.as_ref() {
                     if x > bounds[1] as f32 {
                         return;
@@ -257,6 +279,7 @@ impl WgpuTextLayout {
 }
 
 pub struct WgpuTextLayoutBuilder {
+    width: f64,
     state: WgpuText,
     text: String,
     attrs: Attributes,
@@ -265,6 +288,7 @@ pub struct WgpuTextLayoutBuilder {
 impl WgpuTextLayoutBuilder {
     pub(crate) fn new(text: impl TextStorage, state: WgpuText) -> Self {
         Self {
+            width: f64::MAX,
             text: text.as_str().to_string(),
             attrs: Default::default(),
             state,
@@ -305,7 +329,8 @@ impl Text for WgpuText {
 impl TextLayoutBuilder for WgpuTextLayoutBuilder {
     type Out = WgpuTextLayout;
 
-    fn max_width(self, width: f64) -> Self {
+    fn max_width(mut self, width: f64) -> Self {
+        self.width = width;
         self
     }
 
@@ -334,6 +359,7 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
         let state = self.state.clone();
         let mut text_layout = WgpuTextLayout::new(self.text, state);
         text_layout.set_attrs(self.attrs);
+        text_layout.set_width(self.width);
         text_layout.rebuild(None);
         Ok(text_layout)
     }
