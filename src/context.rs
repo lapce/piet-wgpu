@@ -201,8 +201,9 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             color.2 as f32,
             color.3 as f32,
         ];
-        let affine = self.cur_transform.as_coeffs();
-        let translate = [affine[4] as f32, affine[5] as f32];
+        // let affine = self.cur_transform.as_coeffs();
+        // let translate = [affine[4] as f32, affine[5] as f32];
+        let primitive_id = self.primitives.len() as u32 - 1;
 
         if let Some(rect) = shape.as_rect() {
             self.stroke_tess.tessellate_rectangle(
@@ -221,8 +222,8 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     pos[1] += normal[1] * width as f32 / 2.0;
                     GpuVertex {
                         pos,
-                        translate,
                         color,
+                        primitive_id,
                         ..Default::default()
                     }
                 }),
@@ -246,8 +247,8 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     pos[1] += normal[1] * width as f32 / 2.0;
                     GpuVertex {
                         pos,
-                        translate,
                         color,
+                        primitive_id,
                         ..Default::default()
                     }
                 }),
@@ -300,8 +301,8 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     pos[1] += normal[1] * width as f32 / 2.0;
                     GpuVertex {
                         pos,
-                        translate,
                         color,
+                        primitive_id,
                         ..Default::default()
                     }
                 }),
