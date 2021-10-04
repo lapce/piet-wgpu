@@ -600,24 +600,28 @@ impl Cache {
             return Ok(&row.glyphs[*index]);
         }
 
+        let padding = 2.0;
         let font = &self.fonts[glyph.font_id];
         let font_metrics = font.metrics();
         let units_per_em = font_metrics.units_per_em as f32;
-        let glyph_width =
+        let glyph_real_width =
             font.advance(glyph.glyph_id).unwrap().x() / units_per_em * font_size as f32;
-        let glyph_height = (font_metrics.ascent - font_metrics.descent + font_metrics.line_gap)
-            / units_per_em
-            * font_size as f32;
+        let glyph_real_height =
+            (font_metrics.ascent - font_metrics.descent + font_metrics.line_gap) / units_per_em
+                * font_size as f32;
         let glyph_metric = GlyphMetricInfo {
             ascent: (font_metrics.ascent / units_per_em * font_size as f32) as f64 / scale,
             descent: (font_metrics.descent / units_per_em * font_size as f32) as f64 / scale,
             line_gap: (font_metrics.line_gap / units_per_em * font_size as f32) as f64 / scale,
             mono: font.is_monospace(),
         };
-        let mut glyph_rect = Size::new(glyph_width as f64, glyph_height as f64).to_rect();
+        let glyph_rect = Size::new(glyph_real_width as f64, glyph_real_height as f64).to_rect();
+
+        let glyph_width = glyph_real_width.ceil() as u32;
+        let glyph_height = glyph_real_height.ceil() as u32 + padding as u32;
 
         let mut canvas = Canvas::new(
-            Vector2I::new(glyph_width.ceil() as i32, glyph_height.ceil() as i32),
+            Vector2I::new(glyph_width as i32, glyph_height as i32),
             Format::A8,
         );
         font.rasterize_glyph(
@@ -626,7 +630,7 @@ impl Cache {
             font_size as f32,
             Transform2F::from_translation(Vector2F::new(
                 0.0,
-                font_metrics.ascent / units_per_em * font_size as f32,
+                font_metrics.ascent / units_per_em * font_size as f32 + padding / 2.0,
             )),
             HintingOptions::None,
             RasterizationOptions::GrayscaleAa,
@@ -636,29 +640,22 @@ impl Cache {
         let mut offset = [0, 0];
         let mut inserted = false;
         for (row_number, row) in self.rows.iter_mut().rev() {
-            if row.height == glyph_height.ceil() as u32 {
-                if self.width - row.width > glyph_width.ceil() as u32 {
-                    let origin = Point::new(row.width as f64, row.y as f64);
-                    glyph_rect = glyph_rect.with_origin(origin);
-                    let mut cache_rect = glyph_rect.clone();
-                    cache_rect.x0 /= self.width as f64;
-                    cache_rect.x1 /= self.width as f64;
-                    cache_rect.y0 /= self.height as f64;
-                    cache_rect.y1 /= self.height as f64;
-                    let glyph_pos = GlyphPosInfo {
-                        info: glyph.clone(),
-                        rect: glyph_rect.with_size(Size::new(
-                            glyph_rect.size().width / scale,
-                            glyph_rect.size().height / scale,
-                        )),
-                        metric: glyph_metric.clone(),
-                        cache_rect,
-                    };
+            if row.height == glyph_height {
+                if self.width - row.width > glyph_width {
+                    let origin = Point::new(row.width as f64, row.y as f64 + padding as f64 / 2.0);
+                    let glyph_pos = glyph_rect_to_pos(
+                        glyph_rect,
+                        origin,
+                        &glyph,
+                        &glyph_metric,
+                        scale,
+                        [self.width, self.height],
+                    );
 
                     row.glyphs.push(glyph_pos);
                     offset[0] = row.width;
                     offset[1] = row.y;
-                    row.width += glyph_width.ceil() as u32;
+                    row.width += glyph_width;
                     self.glyphs
                         .insert(glyph.clone(), (*row_number, row.glyphs.len() - 1));
                     inserted = true;
@@ -673,26 +670,19 @@ impl Cache {
                 let last_row = self.rows.get(&(self.rows.len() - 1)).unwrap();
                 y = last_row.y + last_row.height;
             }
-            if self.height < y + glyph_height.ceil() as u32 {
+            if self.height < y + glyph_height {
                 return Err(piet::Error::MissingFont);
             }
 
-            let origin = Point::new(0.0, y as f64);
-            glyph_rect = glyph_rect.with_origin(origin);
-            let mut cache_rect = glyph_rect.clone();
-            cache_rect.x0 /= self.width as f64;
-            cache_rect.x1 /= self.width as f64;
-            cache_rect.y0 /= self.height as f64;
-            cache_rect.y1 /= self.height as f64;
-            let glyph_pos = GlyphPosInfo {
-                info: glyph.clone(),
-                rect: glyph_rect.with_size(Size::new(
-                    glyph_rect.size().width / scale,
-                    glyph_rect.size().height / scale,
-                )),
-                metric: glyph_metric,
-                cache_rect,
-            };
+            let origin = Point::new(0.0, y as f64 + padding as f64 / 2.0);
+            let glyph_pos = glyph_rect_to_pos(
+                glyph_rect,
+                origin,
+                &glyph,
+                &glyph_metric,
+                scale,
+                [self.width, self.height],
+            );
 
             offset[0] = 0;
             offset[1] = y;
@@ -700,8 +690,8 @@ impl Cache {
             let glyphs = vec![glyph_pos];
             let row = Row {
                 y,
-                height: glyph_height.ceil() as u32,
-                width: glyph_width.ceil() as u32,
+                height: glyph_height,
+                width: glyph_width,
                 glyphs,
             };
 
@@ -714,7 +704,7 @@ impl Cache {
             staging_belt,
             encoder,
             offset,
-            [glyph_width.ceil() as u32, glyph_height.ceil() as u32],
+            [glyph_width, glyph_height],
             &canvas.pixels,
         );
 
@@ -839,4 +829,30 @@ impl Cache {
             },
         );
     }
+}
+
+fn glyph_rect_to_pos(
+    glyph_rect: Rect,
+    origin: Point,
+    glyph: &GlyphInfo,
+    glyph_metric: &GlyphMetricInfo,
+    scale: f64,
+    size: [u32; 2],
+) -> GlyphPosInfo {
+    let glyph_rect = glyph_rect.with_origin(origin);
+    let mut cache_rect = glyph_rect.clone();
+    cache_rect.x0 /= size[0] as f64;
+    cache_rect.x1 /= size[0] as f64;
+    cache_rect.y0 /= size[1] as f64;
+    cache_rect.y1 /= size[1] as f64;
+    let glyph_pos = GlyphPosInfo {
+        info: glyph.clone(),
+        rect: glyph_rect.with_size(Size::new(
+            glyph_rect.size().width / scale,
+            glyph_rect.size().height / scale,
+        )),
+        metric: glyph_metric.clone(),
+        cache_rect,
+    };
+    glyph_pos
 }
