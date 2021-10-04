@@ -671,7 +671,7 @@ impl Cache {
             let mut y = 0;
             if self.rows.len() > 0 {
                 let last_row = self.rows.get(&(self.rows.len() - 1)).unwrap();
-                y = last_row.y + last_row.height;
+                y = last_row.y + last_row.height + 1;
             }
             if self.height < y + glyph_height.ceil() as u32 {
                 return Err(piet::Error::MissingFont);
