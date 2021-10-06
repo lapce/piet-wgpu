@@ -45,14 +45,9 @@ impl FromStr for Svg {
     }
 }
 
-pub(crate) struct Transform {
-    data1: [f32; 4],
-    data2: [f32; 2],
-}
-
 pub(crate) struct SvgData {
     pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
-    pub(crate) transforms: Vec<Transform>,
+    pub(crate) transforms: Vec<[f32; 6]>,
 }
 
 pub(crate) struct SvgStore {
@@ -80,23 +75,23 @@ impl SvgStore {
 
     fn new_svg_data(&mut self, svg: &Svg) -> SvgData {
         let mut prev_transform = usvg::Transform {
-            a: NAN,
-            b: NAN,
-            c: NAN,
-            d: NAN,
-            e: NAN,
-            f: NAN,
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: 0.0,
+            f: 0.0,
         };
         let mut geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
         let mut transforms = Vec::new();
+        transforms.push([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
         for node in svg.tree.root().descendants() {
             if let usvg::NodeKind::Path(ref p) = *node.borrow() {
                 let t = node.transform();
                 if t != prev_transform {
-                    transforms.push(Transform {
-                        data1: [t.a as f32, t.b as f32, t.c as f32, t.d as f32],
-                        data2: [t.e as f32, t.f as f32],
-                    });
+                    transforms.push([
+                        t.a as f32, t.b as f32, t.c as f32, t.d as f32, t.e as f32, t.f as f32,
+                    ]);
                     prev_transform = t;
                 }
                 if let Some(ref fill) = p.fill {

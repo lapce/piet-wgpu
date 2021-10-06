@@ -117,13 +117,6 @@ impl<'a> WgpuRenderContext<'a> {
         let scale =
             (rect.width() / view_rect.width()).min(rect.height() / view_rect.height()) as f32;
 
-        self.add_primitive();
-        let primitive_id = self.primitives.len() as u32 - 1;
-        let primitive = self.primitives.last_mut().unwrap();
-        primitive.transform_1[0] *= scale;
-        primitive.transform_1[3] *= scale;
-        self.add_primitive();
-
         let translate = [rect.x0 as f32, rect.y0 as f32];
         let override_color = override_color.map(|c| {
             let color = c.as_rgba();
@@ -135,7 +128,21 @@ impl<'a> WgpuRenderContext<'a> {
             ]
         });
         let svg_data = self.renderer.svg_store.get_svg_data(svg);
+        let transforms = svg_data.transforms.clone();
         let offset = self.geometry.vertices.len() as u32;
+
+        let primitive_id = self.primitives.len() as u32;
+        for transform in transforms {
+            self.add_primitive();
+            let primitive = self.primitives.last_mut().unwrap();
+            primitive.transform_1[0] *= scale * transform[0];
+            primitive.transform_1[3] *= scale * transform[3];
+            primitive.transform_2[0] += scale * transform[4];
+            primitive.transform_2[1] += scale * transform[5];
+        }
+        self.add_primitive();
+
+        let svg_data = self.renderer.svg_store.get_svg_data(svg);
         let mut vertices = svg_data
             .geometry
             .vertices
@@ -143,7 +150,7 @@ impl<'a> WgpuRenderContext<'a> {
             .map(|v| {
                 let mut v = v.clone();
                 v.translate = translate;
-                v.primitive_id = primitive_id;
+                v.primitive_id = primitive_id + v.primitive_id;
                 if let Some(c) = override_color.clone() {
                     v.color = c;
                 }
