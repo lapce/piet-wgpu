@@ -495,7 +495,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
 
         self.add_primitive();
         let primitive = self.primitives.last_mut().unwrap();
-        primitive.clip = 0.0;
         primitive.blur_radius = blur_radius as f32;
         primitive.blur_rect = [
             blur_rect.x0 as f32,
