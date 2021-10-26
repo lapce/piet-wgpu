@@ -20,7 +20,7 @@ use piet::{
 pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
     view: wgpu::TextureView,
-    frame: wgpu::SurfaceFrame,
+    texture: wgpu::SurfaceTexture,
     pub(crate) fill_tess: FillTessellator,
     pub(crate) stroke_tess: StrokeTessellator,
     pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
@@ -46,9 +46,8 @@ impl<'a> WgpuRenderContext<'a> {
     pub fn new(renderer: &'a mut WgpuRenderer) -> Self {
         let text = renderer.text();
         let geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
-        let frame = renderer.surface.get_current_frame().unwrap();
-        let view = frame
-            .output
+        let texture = renderer.surface.get_current_texture().unwrap();
+        let view = texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -76,7 +75,7 @@ impl<'a> WgpuRenderContext<'a> {
         Self {
             renderer,
             view,
-            frame,
+            texture,
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
             geometry,

@@ -55,6 +55,7 @@ impl WgpuRenderer {
             futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
             }))
             .ok_or(piet::Error::NotSupported)?;
         let (device, queue) = futures::executor::block_on(
