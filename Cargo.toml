@@ -17,7 +17,7 @@ rustc-hash = "1.1.0"
 pathfinder_geometry = "0.5.1"
 lyon = "0.17.5"
 piet = "0.4.0"
-wgpu = { version = "0.10.0", features = ["spirv"] }
+wgpu = { version = "0.11.0", features = ["spirv"] }
 futures = "0.3.17"
 glam = "0.10"
 raw-window-handle = "0.3.3"
