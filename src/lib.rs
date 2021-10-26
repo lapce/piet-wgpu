@@ -49,7 +49,7 @@ pub struct WgpuRenderer {
 
 impl WgpuRenderer {
     pub fn new<W: raw_window_handle::HasRawWindowHandle>(window: &W) -> Result<Self, piet::Error> {
-        let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
+        let instance = wgpu::Instance::new(wgpu::Backends::all());
         let surface = unsafe { instance.create_surface(window) };
         let adapter =
             futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -115,7 +115,7 @@ impl WgpuRenderer {
             format: wgpu::TextureFormat::Bgra8Unorm,
             width: size.width as u32,
             height: size.height as u32,
-            present_mode: wgpu::PresentMode::Mailbox,
+            present_mode: wgpu::PresentMode::Fifo,
         };
         self.surface.configure(&self.device, &sc_desc);
         let msaa_texture = self.device.create_texture(&wgpu::TextureDescriptor {
