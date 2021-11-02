@@ -131,11 +131,16 @@ impl WgpuTextLayout {
         let is_mono = self.ref_glyph.borrow().metric.mono;
         let mono_width = self.ref_glyph.borrow().rect.width();
 
+        let len = self.text.chars().count();
+
         let mut glyphs = self.glyphs.borrow_mut();
         glyphs.clear();
+        glyphs.reserve(len);
         let mut geometry = self.geometry.borrow_mut();
         geometry.vertices.clear();
         geometry.indices.clear();
+        geometry.vertices.reserve(4 * len);
+        geometry.indices.reserve(6 * len);
 
         let mut x = 0.0;
         let mut y = 0.0;

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
@@ -9,6 +8,7 @@ use font_kit::font::Font;
 use font_kit::hinting::HintingOptions;
 use font_kit::loader::Loader;
 use font_kit::source::SystemSource;
+use hashbrown::HashMap;
 use include_dir::include_dir;
 use include_dir::Dir;
 use linked_hash_map::LinkedHashMap;
@@ -21,7 +21,6 @@ use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2F, Vector2I};
 use piet::kurbo::{Affine, Point, Rect, Size};
 use piet::{Color, FontFamily, FontWeight};
-use rustc_hash::{FxHashMap, FxHasher};
 use wgpu::util::DeviceExt;
 
 const FONTS_DIR: Dir = include_dir!("./fonts");
@@ -446,8 +445,6 @@ struct Row {
     glyphs: Vec<GlyphPosInfo>,
 }
 
-type FxBuildHasher = BuildHasherDefault<FxHasher>;
-
 pub struct Cache {
     texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
@@ -460,11 +457,11 @@ pub struct Cache {
     fonts: Vec<Font>,
     fallback_fonts_range: std::ops::Range<usize>,
     fallback_fonts_loaded: bool,
-    font_families: FxHashMap<(FontFamily, FontWeight), usize>,
+    font_families: HashMap<(FontFamily, FontWeight), usize>,
 
-    rows: LinkedHashMap<usize, Row, FxBuildHasher>,
-    glyphs: FxHashMap<GlyphInfo, (usize, usize)>,
-    glyph_infos: FxHashMap<(char, FontFamily, FontWeight), (usize, u32)>,
+    rows: LinkedHashMap<usize, Row>,
+    glyphs: HashMap<GlyphInfo, (usize, usize)>,
+    glyph_infos: HashMap<(char, FontFamily, FontWeight), (usize, u32)>,
     pub(crate) scale: f64,
 }
 
@@ -515,14 +512,14 @@ impl Cache {
 
             font_source: SystemSource::new(),
 
-            font_families: HashMap::default(),
+            font_families: HashMap::new(),
             fonts: Vec::new(),
             fallback_fonts_range: 0..0,
             fallback_fonts_loaded: false,
 
-            rows: LinkedHashMap::default(),
-            glyphs: HashMap::default(),
-            glyph_infos: HashMap::default(),
+            rows: LinkedHashMap::new(),
+            glyphs: HashMap::new(),
+            glyph_infos: HashMap::new(),
             scale: 1.0,
         }
     }
