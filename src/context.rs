@@ -379,7 +379,6 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         self.renderer.ensure_encoder();
         let mut encoder = self.renderer.take_encoder();
 
-        println!("gemerty len {}", self.geometry.vertices.len());
         self.renderer.pipeline.upload_data(
             &self.renderer.device,
             &mut self.renderer.staging_belt.borrow_mut(),
