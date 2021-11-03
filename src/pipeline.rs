@@ -296,18 +296,14 @@ impl Pipeline {
         }
     }
 
-    pub fn draw(
+    pub fn upload_data(
         &mut self,
         device: &wgpu::Device,
         staging_belt: &mut wgpu::util::StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        msaa: &wgpu::TextureView,
         geometry: &VertexBuffers<GpuVertex, u32>,
         primitives: &[Primitive],
     ) {
-        let fill_range = 0..(geometry.indices.len() as u32);
-
         if geometry.vertices.len() > self.supported_vertices {
             self.supported_vertices = geometry.vertices.len();
             let size = std::mem::size_of::<GpuVertex>() as u64 * self.supported_vertices as u64;
@@ -390,6 +386,17 @@ impl Pipeline {
             );
             primivites_buffer.copy_from_slice(primitives_bytes);
         }
+    }
+
+    pub fn draw(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        msaa: &wgpu::TextureView,
+        geometry: &VertexBuffers<GpuVertex, u32>,
+    ) {
+        let fill_range = 0..(geometry.indices.len() as u32);
 
         {
             let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -411,7 +418,7 @@ impl Pipeline {
                 label: None,
                 color_attachments: &[wgpu::RenderPassColorAttachment {
                     view: msaa,
-                    resolve_target: Some(view),
+                    resolve_target: Some(&view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: true,

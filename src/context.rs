@@ -19,8 +19,6 @@ use piet::{
 
 pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
-    view: wgpu::TextureView,
-    pub(crate) texture: Option<wgpu::SurfaceTexture>,
     pub(crate) fill_tess: FillTessellator,
     pub(crate) stroke_tess: StrokeTessellator,
     pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
@@ -46,15 +44,9 @@ impl<'a> WgpuRenderContext<'a> {
     pub fn new(renderer: &'a mut WgpuRenderer) -> Self {
         let text = renderer.text();
         let geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
-        let texture = renderer.surface.get_current_texture().unwrap();
-        let view = texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
 
         Self {
             renderer,
-            view,
-            texture: Some(texture),
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
             geometry,
@@ -385,20 +377,37 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
 
     fn finish(&mut self) -> Result<(), piet::Error> {
         self.renderer.ensure_encoder();
-        self.renderer.pipeline.draw(
+        let mut encoder = self.renderer.take_encoder();
+
+        println!("gemerty len {}", self.geometry.vertices.len());
+        self.renderer.pipeline.upload_data(
             &self.renderer.device,
             &mut self.renderer.staging_belt.borrow_mut(),
-            &mut self.renderer.encoder.borrow_mut().as_mut().unwrap(),
-            &self.view,
-            &self.renderer.msaa,
+            &mut encoder,
             &self.geometry,
             &self.primitives,
         );
 
+        let texture = self
+            .renderer
+            .surface
+            .get_current_texture()
+            .map_err(|e| piet::Error::NotSupported)?;
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        self.renderer.pipeline.draw(
+            &self.renderer.device,
+            &mut encoder,
+            &view,
+            &self.renderer.msaa,
+            &self.geometry,
+        );
+
         self.renderer.staging_belt.borrow_mut().finish();
-        let encoder = self.renderer.take_encoder();
         self.renderer.queue.submit(Some(encoder.finish()));
-        self.texture.take().unwrap().present();
+        texture.present();
 
         self.renderer
             .local_pool
