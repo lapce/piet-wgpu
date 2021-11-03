@@ -636,7 +636,7 @@ impl Cache {
         };
         let glyph_rect = Size::new(glyph_real_width as f64, glyph_real_height as f64).to_rect();
 
-        let glyph_width = glyph_real_width.ceil() as u32;
+        let glyph_width = glyph_real_width.ceil() as u32 + padding as u32;
         let glyph_height = glyph_real_height.ceil() as u32 + padding as u32;
 
         let mut canvas = Canvas::new(
@@ -648,7 +648,7 @@ impl Cache {
             glyph.glyph_id,
             font_size as f32,
             Transform2F::from_translation(Vector2F::new(
-                0.0,
+                padding / 2.0,
                 font_metrics.ascent / units_per_em * font_size as f32 + padding / 2.0,
             )),
             HintingOptions::None,
@@ -661,7 +661,10 @@ impl Cache {
         for (row_number, row) in self.rows.iter_mut().rev() {
             if row.height == glyph_height {
                 if self.width - row.width > glyph_width {
-                    let origin = Point::new(row.width as f64, row.y as f64 + padding as f64 / 2.0);
+                    let origin = Point::new(
+                        row.width as f64 + padding as f64 / 2.0,
+                        row.y as f64 + padding as f64 / 2.0,
+                    );
                     let glyph_pos = glyph_rect_to_pos(
                         glyph_rect,
                         origin,
@@ -693,7 +696,7 @@ impl Cache {
                 return Err(piet::Error::MissingFont);
             }
 
-            let origin = Point::new(0.0, y as f64 + padding as f64 / 2.0);
+            let origin = Point::new(0.0 + padding as f64 / 2.0, y as f64 + padding as f64 / 2.0);
             let glyph_pos = glyph_rect_to_pos(
                 glyph_rect,
                 origin,
