@@ -51,27 +51,6 @@ impl<'a> WgpuRenderContext<'a> {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        {
-            renderer.ensure_encoder();
-            let _ = renderer
-                .encoder
-                .borrow_mut()
-                .as_mut()
-                .unwrap()
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: None,
-                    color_attachments: &[wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                            store: true,
-                        },
-                    }],
-                    depth_stencil_attachment: None,
-                });
-        }
-
         Self {
             renderer,
             view,
