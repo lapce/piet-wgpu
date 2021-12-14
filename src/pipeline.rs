@@ -24,6 +24,7 @@ use piet::{Color, FontFamily, FontWeight};
 use wgpu::util::DeviceExt;
 
 const FONTS_DIR: Dir = include_dir!("./fonts");
+const DEFAULT_FONT: &[u8] = include_bytes!("../fonts/CascadiaCode-Regular.otf");
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -477,6 +478,7 @@ pub struct Cache {
 
     font_source: SystemSource,
     fonts: Vec<Font>,
+    default_font: Font,
     fallback_fonts_range: std::ops::Range<usize>,
     fallback_fonts_loaded: bool,
     font_families: HashMap<(FontFamily, FontWeight), usize>,
@@ -524,6 +526,8 @@ impl Cache {
             mapped_at_creation: false,
         });
 
+        let default_font = Font::from_bytes(Arc::new(DEFAULT_FONT.to_vec()), 0).unwrap();
+
         Cache {
             texture,
             view,
@@ -536,6 +540,7 @@ impl Cache {
 
             font_families: HashMap::new(),
             fonts: Vec::new(),
+            default_font,
             fallback_fonts_range: 0..0,
             fallback_fonts_loaded: false,
 
@@ -751,7 +756,7 @@ impl Cache {
         Ok(*font_id)
     }
 
-    fn get_new_font(&self, family: &FontFamily, weight: FontWeight) -> Result<Font, piet::Error> {
+    fn get_new_font(&self, family: &FontFamily, weight: FontWeight) -> Font {
         let family_name = match family.inner() {
             piet::FontFamilyInner::Serif => FamilyName::Serif,
             piet::FontFamilyInner::SansSerif => FamilyName::SansSerif,
@@ -762,16 +767,17 @@ impl Cache {
             }
             _ => FamilyName::SansSerif,
         };
-        let handle = self
+        let font = self
             .font_source
             .select_best_match(
-                &[family_name, FamilyName::Monospace],
+                &[family_name],
                 &font_kit::properties::Properties::new()
                     .weight(font_kit::properties::Weight(weight.to_raw() as f32)),
             )
-            .map_err(|e| piet::Error::MissingFont)?;
-        let font = handle.load().map_err(|_| piet::Error::MissingFont)?;
-        Ok(font)
+            .ok()
+            .and_then(|h| h.load().ok())
+            .unwrap_or(self.default_font.clone());
+        font
     }
 
     pub fn update(
