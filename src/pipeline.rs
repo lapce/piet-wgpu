@@ -765,7 +765,7 @@ impl Cache {
         let handle = self
             .font_source
             .select_best_match(
-                &[family_name],
+                &[family_name, FamilyName::Monospace],
                 &font_kit::properties::Properties::new()
                     .weight(font_kit::properties::Weight(weight.to_raw() as f32)),
             )
