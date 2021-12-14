@@ -582,7 +582,7 @@ impl Cache {
     ) -> Result<GlyphInfo, piet::Error> {
         let key = (c, font_family.clone(), font_weight);
         if !self.glyph_infos.contains_key(&key) {
-            let font_id = self.get_font_by_family(font_family.clone(), font_weight)?;
+            let font_id = self.get_font_by_family(font_family.clone(), font_weight);
             let font = &self.fonts[font_id];
 
             let (font_id, glyph_id) = if let Some(glyph_id) = font.glyph_for_char(c) {
@@ -740,20 +740,16 @@ impl Cache {
         Ok(&row.glyphs[*index])
     }
 
-    fn get_font_by_family(
-        &mut self,
-        family: FontFamily,
-        weight: FontWeight,
-    ) -> Result<usize, piet::Error> {
+    fn get_font_by_family(&mut self, family: FontFamily, weight: FontWeight) -> usize {
         if !self.font_families.contains_key(&(family.clone(), weight)) {
-            let font = self.get_new_font(&family, weight)?;
+            let font = self.get_new_font(&family, weight);
             let font_id = self.fonts.len();
             self.font_families.insert((family.clone(), weight), font_id);
             self.fonts.push(font);
         }
 
         let font_id = self.font_families.get(&(family.clone(), weight)).unwrap();
-        Ok(*font_id)
+        *font_id
     }
 
     fn get_new_font(&self, family: &FontFamily, weight: FontWeight) -> Font {
