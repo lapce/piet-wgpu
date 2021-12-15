@@ -122,6 +122,12 @@ fn main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
         if (alpha <= 0.0) {
             discard;
         }
+        if (alpha <= 1.0) {
+            alpha = alpha * 1.5;
+            if (alpha > 1.0) {
+                alpha = 1.0;
+            }
+        }
         color.w = color.w * alpha;
     }
     
