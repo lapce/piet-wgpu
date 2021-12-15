@@ -80,7 +80,7 @@ impl WgpuRenderer {
             mip_level_count: 1,
             sample_count: 4,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
         let msaa = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -89,7 +89,7 @@ impl WgpuRenderer {
         let encoder = Rc::new(RefCell::new(None));
         let device = Rc::new(device);
         let text = WgpuText::new(device.clone(), staging_belt.clone(), encoder.clone());
-        let pipeline = pipeline::Pipeline::new(&device, &text.cache.borrow());
+        let pipeline = pipeline::Pipeline::new(&device, format, &text.cache.borrow());
 
         Ok(Self {
             instance,
@@ -112,7 +112,7 @@ impl WgpuRenderer {
         self.size = size;
         let sc_desc = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8Unorm,
+            format: self.format,
             width: size.width as u32,
             height: size.height as u32,
             present_mode: wgpu::PresentMode::Fifo,
@@ -128,7 +128,7 @@ impl WgpuRenderer {
             mip_level_count: 1,
             sample_count: 4,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
+            format: self.format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         });
         self.msaa = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());

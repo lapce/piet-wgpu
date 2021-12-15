@@ -110,7 +110,7 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(device: &wgpu::Device, cache: &Cache) -> Self {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, cache: &Cache) -> Self {
         let globals_buffer_byte_size = std::mem::size_of::<Globals>() as u64;
         let supported_primitives = 1000;
         let primitives_buffer_byte_size =
@@ -235,7 +235,7 @@ impl Pipeline {
             label: Some("pipeline layout"),
         });
 
-        let render_pipeline_descriptor = wgpu::RenderPipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("pipeline descriptor"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -258,7 +258,7 @@ impl Pipeline {
                 module: &shader,
                 entry_point: "main",
                 targets: &[wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 }],
@@ -278,9 +278,7 @@ impl Pipeline {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-        };
-
-        let pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
+        });
 
         Self {
             pipeline,
