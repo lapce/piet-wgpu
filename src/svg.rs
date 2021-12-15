@@ -12,7 +12,7 @@ use lyon::{
 use sha2::{Digest, Sha256};
 use usvg::NodeExt;
 
-use crate::pipeline::GpuVertex;
+use crate::{context::from_linear, pipeline::GpuVertex};
 
 #[derive(Clone)]
 pub struct Svg {
@@ -100,9 +100,9 @@ impl SvgStore {
                         _ => FALLBACK_COLOR,
                     };
                     let color = [
-                        color.red as f32 / 255.0,
-                        color.green as f32 / 255.0,
-                        color.blue as f32 / 255.0,
+                        from_linear(color.red as f32 / 255.0),
+                        from_linear(color.green as f32 / 255.0),
+                        from_linear(color.blue as f32 / 255.0),
                         fill.opacity.value() as f32,
                     ];
                     self.fill_tess.tessellate(
@@ -120,9 +120,9 @@ impl SvgStore {
                 if let Some(ref stroke) = p.stroke {
                     let (stroke_color, stroke_opacity, stroke_opts) = convert_stroke(stroke);
                     let color = [
-                        stroke_color.red as f32 / 255.0,
-                        stroke_color.green as f32 / 255.0,
-                        stroke_color.blue as f32 / 255.0,
+                        from_linear(stroke_color.red as f32 / 255.0),
+                        from_linear(stroke_color.green as f32 / 255.0),
+                        from_linear(stroke_color.blue as f32 / 255.0),
                         stroke_opacity.value() as f32,
                     ];
                     let _ = self.stroke_tess.tessellate(

@@ -14,7 +14,7 @@ use piet::{
 };
 use unicode_width::UnicodeWidthChar;
 
-use crate::context::{from_linear, WgpuRenderContext};
+use crate::context::{format_color, from_linear, WgpuRenderContext};
 use crate::pipeline::{Cache, GlyphMetricInfo, GlyphPosInfo, GpuVertex};
 
 #[derive(Clone)]
@@ -150,7 +150,7 @@ impl WgpuTextLayout {
             let font_size = self.attrs.size(index) as f32;
             let font_weight = self.attrs.font_weight(index);
             let color = self.attrs.color(index);
-            let color = from_linear(&color);
+            let color = format_color(&color);
             if let Ok(glyph_pos) = self
                 .state
                 .get_glyph_pos(c, font_family, font_size, font_weight)

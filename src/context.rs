@@ -88,7 +88,7 @@ impl<'a> WgpuRenderContext<'a> {
             (rect.width() / view_rect.width()).min(rect.height() / view_rect.height()) as f32;
 
         let translate = [rect.x0 as f32, rect.y0 as f32];
-        let override_color = override_color.map(|c| from_linear(c));
+        let override_color = override_color.map(|c| format_color(c));
         let svg_data = self.renderer.svg_store.get_svg_data(svg);
         let transforms = svg_data.transforms.clone();
         let offset = self.geometry.vertices.len() as u32;
@@ -163,7 +163,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     fn stroke(&mut self, shape: impl Shape, brush: &impl piet::IntoBrush<Self>, width: f64) {
         let brush = brush.make_brush(self, || shape.bounding_box()).into_owned();
         let Brush::Solid(color) = brush;
-        let color = from_linear(&color);
+        let color = format_color(&color);
         // let affine = self.cur_transform.as_coeffs();
         // let translate = [affine[4] as f32, affine[5] as f32];
         let primitive_id = self.primitives.len() as u32 - 1;
@@ -286,7 +286,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         if let Some(rect) = shape.as_rect() {
             let brush = brush.make_brush(self, || shape.bounding_box()).into_owned();
             let Brush::Solid(color) = brush;
-            let color = from_linear(&color);
+            let color = format_color(&color);
             let primitive_id = self.primitives.len() as u32 - 1;
             self.fill_tess.tessellate_rectangle(
                 &lyon::geom::Rect::new(
@@ -452,7 +452,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         let blur_rect = rect.inflate(-3.0 * blur_radius, -3.0 * blur_radius);
         let brush = brush.make_brush(self, || rect).into_owned();
         let Brush::Solid(color) = brush;
-        let color = from_linear(&color);
+        let color = format_color(&color);
 
         self.add_primitive();
         let primitive = self.primitives.last_mut().unwrap();
@@ -511,19 +511,20 @@ impl Image for WgpuImage {
     }
 }
 
-pub fn from_linear(color: &Color) -> [f32; 4] {
-    let format_color = |x: f32| {
-        if x <= 0.04045 {
-            x * (1.0 / 12.92)
-        } else {
-            ((x + 0.055) * (1.0 / 1.055)).powf(2.4)
-        }
-    };
+pub fn from_linear(x: f32) -> f32 {
+    if x <= 0.04045 {
+        x * (1.0 / 12.92)
+    } else {
+        ((x + 0.055) * (1.0 / 1.055)).powf(2.4)
+    }
+}
+
+pub fn format_color(color: &Color) -> [f32; 4] {
     let color = color.as_rgba();
     [
-        format_color(color.0 as f32),
-        format_color(color.1 as f32),
-        format_color(color.2 as f32),
+        from_linear(color.0 as f32),
+        from_linear(color.1 as f32),
+        from_linear(color.2 as f32),
         color.3 as f32,
     ]
 }
