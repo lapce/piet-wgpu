@@ -123,7 +123,11 @@ fn main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
             discard;
         }
         if (alpha <= 1.0) {
-            alpha = alpha * 1.5;
+            if (alpha <= 0.0031308) {
+                alpha = alpha * 12.92;
+            } else {
+                alpha = pow(alpha, 1.0 / 2.0) * 1.055 - 0.055;
+            }
             if (alpha > 1.0) {
                 alpha = 1.0;
             }
