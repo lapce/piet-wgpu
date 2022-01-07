@@ -9,13 +9,11 @@ struct Primitive {
     u_blur_radius: f32;
 };
 
-[[block]]
 struct Globals {
     u_resolution: vec2<f32>;
     u_scale: f32;
 };
 
-[[block]]
 struct Primitives {
     data: array<Primitive>;
 };
@@ -47,7 +45,7 @@ struct VertexOutput {
 };
 
 [[stage(vertex)]]
-fn main(input: VertexInput) -> VertexOutput {
+fn vs_main(input: VertexInput) -> VertexOutput {
     let primitive = primitives.data[input.v_primitive_id];
 
     var out: VertexOutput;
@@ -105,7 +103,7 @@ fn box_shadow(lower: vec2<f32>, upper: vec2<f32>, point: vec2<f32>, radius: f32)
 }
 
 [[stage(fragment)]]
-fn main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
+fn fs_main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
     var color: vec4<f32> = input.color;
     
     if (input.blur_radius > 0.0) {
