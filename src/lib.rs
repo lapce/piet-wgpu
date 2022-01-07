@@ -63,7 +63,9 @@ impl WgpuRenderer {
         )
         .map_err(|e| piet::Error::BackendError(Box::new(e)))?;
 
-        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let format = surface
+            .get_preferred_format(&adapter)
+            .ok_or(piet::Error::MissingFeature("no supported texture format"))?;
 
         let staging_belt = wgpu::util::StagingBelt::new(1024);
         let local_pool = futures::executor::LocalPool::new();
