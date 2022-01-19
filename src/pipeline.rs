@@ -453,6 +453,7 @@ pub(crate) struct GlyphMetricInfo {
 pub(crate) struct GlyphPosInfo {
     pub(crate) info: GlyphInfo,
     pub(crate) metric: GlyphMetricInfo,
+    pub(crate) width: f64,
     pub(crate) rect: Rect,
     pub(crate) cache_rect: Rect,
 }
@@ -871,6 +872,7 @@ fn glyph_rect_to_pos(
             glyph_rect.size().width / scale,
             glyph_rect.size().height / scale,
         )),
+        width: glyph_rect.size().width / scale,
         metric: glyph_metric.clone(),
         cache_rect,
     };

@@ -142,10 +142,12 @@ impl WgpuTextLayout {
         geometry.vertices.reserve(4 * len);
         geometry.indices.reserve(6 * len);
 
+        let tab_width = 8;
         let mut x = 0.0;
         let mut y = 0.0;
         let mut max_height = 0.0;
         let mut index = 0;
+        let mut mono_char_widths = 0;
         for c in self.text.chars() {
             let font_family = self.attrs.font(index);
             let font_size = self.attrs.size(index) as f32;
@@ -161,7 +163,15 @@ impl WgpuTextLayout {
                 let mut glyph_pos = glyph_pos.clone();
 
                 let width = if is_mono {
-                    UnicodeWidthChar::width(c).unwrap_or(1) as f32 * mono_width as f32
+                    let char_width = if c == '\t' {
+                        tab_width - mono_char_widths % tab_width
+                    } else {
+                        UnicodeWidthChar::width(c).unwrap_or(1)
+                    };
+                    mono_char_widths += char_width;
+                    let width = char_width as f32 * mono_width as f32;
+                    glyph_pos.width = width as f64;
+                    width
                 } else {
                     glyph_pos.rect.width() as f32
                 };
@@ -191,7 +201,7 @@ impl WgpuTextLayout {
                     }
                 }
 
-                if c == ' ' || c == '\n' {
+                if c == ' ' || c == '\n' || c == '\t' {
                     x = new_x;
                     glyphs.push(glyph_pos);
                     continue;
@@ -376,7 +386,7 @@ impl TextLayout for WgpuTextLayout {
             let glyphs = self.glyphs.borrow();
 
             let last_glyph = &glyphs[glyphs.len() - 1];
-            let width = last_glyph.rect.x1;
+            let width = last_glyph.rect.x0 + last_glyph.width;
             let height = last_glyph.rect.y1;
             Size::new(width as f64, height as f64)
         }
