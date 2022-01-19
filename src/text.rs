@@ -145,11 +145,14 @@ impl WgpuTextLayout {
         let mut x = 0.0;
         let mut y = 0.0;
         let mut max_height = 0.0;
-        for (index, c) in self.text.chars().enumerate() {
+        let mut index = 0;
+        for c in self.text.chars() {
             let font_family = self.attrs.font(index);
             let font_size = self.attrs.size(index) as f32;
             let font_weight = self.attrs.font_weight(index);
             let color = self.attrs.color(index);
+            index += c.len_utf8();
+
             let color = format_color(&color);
             if let Ok(glyph_pos) = self
                 .state
