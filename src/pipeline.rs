@@ -115,7 +115,6 @@ impl Pipeline {
         let supported_primitives = 1000;
         let primitives_buffer_byte_size =
             std::mem::size_of::<Primitive>() as u64 * supported_primitives as u64;
-        println!("primitives buffer size {}", primitives_buffer_byte_size);
 
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Globals ubo"),
