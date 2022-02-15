@@ -107,12 +107,16 @@ fn fs_main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
     var color: vec4<f32> = input.color;
     
     if (input.blur_radius > 0.0) {
-        color.w = color.w * box_shadow(
-           vec2<f32>(input.rect.x, input.rect.y),
-           vec2<f32>(input.rect.z, input.rect.w),
-           vec2<f32>(input.pos.x, input.pos.y),
-           input.blur_radius
-        );
+        if (input.rect.x <= input.pos.x && input.pos.x <= input.rect.z && input.rect.y <= input.pos.y && input.pos.y <= input.rect.w) {
+            color.w = 0.0; 
+        } else {
+            color.w = color.w * box_shadow(
+               vec2<f32>(input.rect.x, input.rect.y),
+               vec2<f32>(input.rect.z, input.rect.w),
+               vec2<f32>(input.pos.x, input.pos.y),
+               input.blur_radius
+            );
+        }
     }
 
     var alpha: f32 = textureSample(font_tex, font_sampler, input.tex_pos).r;
