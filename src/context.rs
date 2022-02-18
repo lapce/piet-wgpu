@@ -45,7 +45,7 @@ impl<'a> WgpuRenderContext<'a> {
         let text = renderer.text();
         let geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
 
-        Self {
+        let mut context = Self {
             renderer,
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
@@ -55,7 +55,9 @@ impl<'a> WgpuRenderContext<'a> {
             state_stack: Vec::new(),
             clip_stack: Vec::new(),
             primitives: Vec::new(),
-        }
+        };
+        context.add_primitive();
+        context
     }
 
     fn pop_clip(&mut self) {
