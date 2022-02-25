@@ -428,7 +428,26 @@ impl TextLayout for WgpuTextLayout {
     }
 
     fn hit_test_point(&self, point: Point) -> HitTestPoint {
-        HitTestPoint::default()
+        let mut hit = HitTestPoint::default();
+        if self.glyphs.borrow().len() == 0 {
+            return hit;
+        }
+
+        let glyphs = self.glyphs.borrow();
+        let mut index = None;
+        for (i, glyph) in glyphs.iter().enumerate() {
+            if point.x < glyph.rect.x0 + glyph.rect.width() / 2.0 {
+                index = Some(i);
+                break;
+            }
+            if point.x < glyph.rect.x1 {
+                index = Some(i + 1);
+                break;
+            }
+        }
+        hit.idx = index.unwrap_or(glyphs.len());
+        hit.is_inside = index.is_some();
+        hit
     }
 
     fn hit_test_text_position(&self, idx: usize) -> HitTestPosition {
