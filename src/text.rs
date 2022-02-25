@@ -117,6 +117,13 @@ impl WgpuTextLayout {
         self.attrs = Rc::new(attrs);
     }
 
+    pub fn set_color(&self, color: &Color) {
+        let color = format_color(&color);
+        for v in self.geometry.borrow_mut().vertices.iter_mut() {
+            v.color = color;
+        }
+    }
+
     pub(crate) fn rebuild(&self, bounds: Option<[f64; 2]>) {
         let font_family = self.attrs.defaults.font.clone();
         let font_size = self.attrs.defaults.font_size;
