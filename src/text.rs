@@ -124,7 +124,7 @@ impl WgpuTextLayout {
         }
     }
 
-    pub(crate) fn rebuild(&self, bounds: Option<[f64; 2]>) {
+    pub(crate) fn rebuild(&self, is_mono: bool, tab_width: usize, bounds: Option<[f64; 2]>) {
         let font_family = self.attrs.defaults.font.clone();
         let font_size = self.attrs.defaults.font_size;
         let font_weight = self.attrs.defaults.weight;
@@ -135,7 +135,6 @@ impl WgpuTextLayout {
             *self.ref_glyph.borrow_mut() = glyph_pos.clone();
         }
 
-        let is_mono = self.ref_glyph.borrow().metric.mono;
         let mono_width = self.ref_glyph.borrow().rect.width();
 
         let len = self.text.chars().count();
@@ -149,7 +148,6 @@ impl WgpuTextLayout {
         geometry.vertices.reserve(4 * len);
         geometry.indices.reserve(6 * len);
 
-        let tab_width = 8;
         let mut x = 0.0;
         let mut y = 0.0;
         let mut max_height = 0.0;
@@ -318,11 +316,26 @@ impl WgpuTextLayoutBuilder {
         self.attrs.add(range, attr);
     }
 
+    pub fn build_with_info(
+        self,
+        is_mono: bool,
+        tab_width: usize,
+        bounds: Option<[f64; 2]>,
+    ) -> WgpuTextLayout {
+        let state = self.state.clone();
+        let mut text_layout = WgpuTextLayout::new(self.text, state);
+        text_layout.set_attrs(self.attrs);
+        text_layout.set_width(self.width);
+        text_layout.rebuild(is_mono, tab_width, bounds);
+        text_layout
+    }
+
     pub fn build_with_bounds(self, bounds: [f64; 2]) -> WgpuTextLayout {
         let state = self.state.clone();
         let mut text_layout = WgpuTextLayout::new(self.text, state);
         text_layout.set_attrs(self.attrs);
-        text_layout.rebuild(Some(bounds));
+        text_layout.set_width(self.width);
+        text_layout.rebuild(false, 8, Some(bounds));
         text_layout
     }
 }
@@ -379,7 +392,7 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
         let mut text_layout = WgpuTextLayout::new(self.text, state);
         text_layout.set_attrs(self.attrs);
         text_layout.set_width(self.width);
-        text_layout.rebuild(None);
+        text_layout.rebuild(false, 8, None);
         Ok(text_layout)
     }
 }
