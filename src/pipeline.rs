@@ -457,6 +457,27 @@ pub(crate) struct GlyphPosInfo {
     pub(crate) cache_rect: Rect,
 }
 
+impl GlyphPosInfo {
+    pub fn empty(width: f64) -> Self {
+        GlyphPosInfo {
+            info: GlyphInfo {
+                font_id: 0,
+                glyph_id: 0,
+                font_size: 0,
+            },
+            metric: GlyphMetricInfo {
+                ascent: 0.0,
+                descent: 0.0,
+                line_gap: 0.0,
+                mono: false,
+            },
+            width: width,
+            rect: Size::new(width, 0.0).to_rect(),
+            cache_rect: Rect::ZERO,
+        }
+    }
+}
+
 struct Row {
     y: u32,
     height: u32,

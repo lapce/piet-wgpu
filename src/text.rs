@@ -160,106 +160,116 @@ impl WgpuTextLayout {
             let color = self.attrs.color(index);
             index += c.len_utf8();
 
+            let default_width = if is_mono {
+                let char_width = if c == '\t' {
+                    tab_width - mono_char_widths % tab_width
+                } else {
+                    UnicodeWidthChar::width(c).unwrap_or(1)
+                };
+                mono_char_widths += char_width;
+                let width = char_width as f32 * mono_width as f32;
+                width
+            } else {
+                let char_width = if c == '\t' {
+                    tab_width
+                } else {
+                    UnicodeWidthChar::width(c).unwrap_or(1)
+                };
+                let width = char_width as f32 * mono_width as f32;
+                width
+            };
+
             let color = format_color(&color);
-            if let Ok(glyph_pos) = self
+            let mut glyph_pos = self
                 .state
                 .get_glyph_pos(c, font_family, font_size, font_weight)
-            {
-                let mut glyph_pos = glyph_pos.clone();
+                .map(|g| g.clone())
+                .unwrap_or_else(|_| GlyphPosInfo::empty(default_width as f64));
+            let width = if is_mono {
+                glyph_pos.width = default_width as f64;
+                default_width
+            } else {
+                glyph_pos.rect.width() as f32
+            };
 
-                let width = if is_mono {
-                    let char_width = if c == '\t' {
-                        tab_width - mono_char_widths % tab_width
-                    } else {
-                        UnicodeWidthChar::width(c).unwrap_or(1)
-                    };
-                    mono_char_widths += char_width;
-                    let width = char_width as f32 * mono_width as f32;
-                    glyph_pos.width = width as f64;
-                    width
-                } else {
-                    glyph_pos.rect.width() as f32
-                };
+            if (x + width) as f64 > self.width {
+                x = 0.0;
+                y += max_height;
+            }
 
-                if (x + width) as f64 > self.width {
-                    x = 0.0;
-                    y += max_height;
+            glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
+
+            let new_x = x + width;
+
+            let height = glyph_pos.rect.height() as f32;
+            if height > max_height {
+                max_height = height;
+            }
+
+            if let Some(bounds) = bounds.as_ref() {
+                if x > bounds[1] as f32 {
+                    return;
                 }
-
-                glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
-
-                let new_x = x + width;
-
-                let height = glyph_pos.rect.height() as f32;
-                if height > max_height {
-                    max_height = height;
-                }
-
-                if let Some(bounds) = bounds.as_ref() {
-                    if x > bounds[1] as f32 {
-                        return;
-                    }
-                    if new_x < bounds[0] as f32 {
-                        x = new_x;
-                        glyphs.push(glyph_pos);
-                        continue;
-                    }
-                }
-
-                if c == ' ' || c == '\n' || c == '\t' {
+                if new_x < bounds[0] as f32 {
                     x = new_x;
                     glyphs.push(glyph_pos);
                     continue;
                 }
+            }
 
-                let rect = &glyph_pos.rect;
-                let cache_rect = &glyph_pos.cache_rect;
-                let mut vertices = vec![
-                    GpuVertex {
-                        pos: [rect.x0 as f32, rect.y0 as f32],
-                        tex: 1.0,
-                        tex_pos: [cache_rect.x0 as f32, cache_rect.y0 as f32],
-                        color,
-                        ..Default::default()
-                    },
-                    GpuVertex {
-                        pos: [rect.x0 as f32, rect.y1 as f32],
-                        tex: 1.0,
-                        tex_pos: [cache_rect.x0 as f32, cache_rect.y1 as f32],
-                        color,
-                        ..Default::default()
-                    },
-                    GpuVertex {
-                        pos: [rect.x1 as f32, rect.y1 as f32],
-                        tex: 1.0,
-                        tex_pos: [cache_rect.x1 as f32, cache_rect.y1 as f32],
-                        color,
-                        ..Default::default()
-                    },
-                    GpuVertex {
-                        pos: [rect.x1 as f32, rect.y0 as f32],
-                        tex: 1.0,
-                        tex_pos: [cache_rect.x1 as f32, cache_rect.y0 as f32],
-                        color,
-                        ..Default::default()
-                    },
-                ];
-                let offset = geometry.vertices.len() as u32;
-                let mut indices = vec![
-                    offset + 0,
-                    offset + 1,
-                    offset + 2,
-                    offset + 0,
-                    offset + 2,
-                    offset + 3,
-                ];
-
-                geometry.vertices.append(&mut vertices);
-                geometry.indices.append(&mut indices);
-
+            if c == ' ' || c == '\n' || c == '\t' {
                 x = new_x;
                 glyphs.push(glyph_pos);
+                continue;
             }
+
+            let rect = &glyph_pos.rect;
+            let cache_rect = &glyph_pos.cache_rect;
+            let mut vertices = vec![
+                GpuVertex {
+                    pos: [rect.x0 as f32, rect.y0 as f32],
+                    tex: 1.0,
+                    tex_pos: [cache_rect.x0 as f32, cache_rect.y0 as f32],
+                    color,
+                    ..Default::default()
+                },
+                GpuVertex {
+                    pos: [rect.x0 as f32, rect.y1 as f32],
+                    tex: 1.0,
+                    tex_pos: [cache_rect.x0 as f32, cache_rect.y1 as f32],
+                    color,
+                    ..Default::default()
+                },
+                GpuVertex {
+                    pos: [rect.x1 as f32, rect.y1 as f32],
+                    tex: 1.0,
+                    tex_pos: [cache_rect.x1 as f32, cache_rect.y1 as f32],
+                    color,
+                    ..Default::default()
+                },
+                GpuVertex {
+                    pos: [rect.x1 as f32, rect.y0 as f32],
+                    tex: 1.0,
+                    tex_pos: [cache_rect.x1 as f32, cache_rect.y0 as f32],
+                    color,
+                    ..Default::default()
+                },
+            ];
+            let offset = geometry.vertices.len() as u32;
+            let mut indices = vec![
+                offset + 0,
+                offset + 1,
+                offset + 2,
+                offset + 0,
+                offset + 2,
+                offset + 3,
+            ];
+
+            geometry.vertices.append(&mut vertices);
+            geometry.indices.append(&mut indices);
+
+            x = new_x;
+            glyphs.push(glyph_pos);
         }
     }
 
