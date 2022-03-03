@@ -6,6 +6,7 @@ mod svg;
 mod text;
 mod transformation;
 
+use log::info;
 pub use piet::kurbo;
 use piet::kurbo::Size;
 pub use piet::*;
@@ -58,6 +59,8 @@ impl WgpuRenderer {
                 force_fallback_adapter: false,
             }))
             .ok_or(piet::Error::NotSupported)?;
+        info!("{:?}", adapter.get_info());
+
         let (device, queue) = futures::executor::block_on(
             adapter.request_device(&wgpu::DeviceDescriptor::default(), None),
         )
