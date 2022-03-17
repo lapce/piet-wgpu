@@ -50,7 +50,8 @@ pub struct WgpuRenderer {
 
 impl WgpuRenderer {
     pub fn new<W: raw_window_handle::HasRawWindowHandle>(window: &W) -> Result<Self, piet::Error> {
-        let instance = wgpu::Instance::new(wgpu::Backends::all());
+        let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
+        let instance = wgpu::Instance::new(backend);
         let surface = unsafe { instance.create_surface(window) };
         let adapter =
             futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
