@@ -631,11 +631,7 @@ impl Cache {
         staging_belt: &mut wgpu::util::StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<&GlyphPosInfo, piet::Error> {
-        let scale = if self.scale == 1.0 {
-            1.0
-        } else {
-            self.scale * 2.0
-        };
+        let scale = self.scale;
 
         let font_size = (font_size as f64 * scale).round() as u32;
         let glyph = self.get_glyph_info(c, font_family.clone(), font_weight, font_size)?;
