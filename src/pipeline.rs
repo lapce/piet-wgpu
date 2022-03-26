@@ -669,6 +669,16 @@ impl Cache {
             Vector2I::new(glyph_width as i32, glyph_height as i32),
             Format::A8,
         );
+
+        #[cfg(target_os = "macos")]
+        let hinting_options = HintingOptions::None;
+
+        #[cfg(target_os = "windows")]
+        let hinting_options = HintingOptions::VerticalSubpixel(font_size as f32);
+
+        #[cfg(target_os = "linux")]
+        let hinting_options = HintingOptions::Full(font_size as f32);
+
         font.rasterize_glyph(
             &mut canvas,
             glyph.glyph_id,
@@ -677,7 +687,7 @@ impl Cache {
                 padding / 2.0,
                 font_metrics.ascent / units_per_em * font_size as f32 + padding / 2.0,
             )),
-            HintingOptions::Full(font_size as f32),
+            hinting_options,
             RasterizationOptions::GrayscaleAa,
         )
         .map_err(|_| piet::Error::MissingFont)?;
