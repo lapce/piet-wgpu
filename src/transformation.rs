@@ -8,7 +8,7 @@ pub struct Transformation(Mat4);
 impl Transformation {
     /// Get the identity transformation.
     pub fn identity() -> Transformation {
-        Transformation(Mat4::identity())
+        Transformation(Mat4::IDENTITY)
     }
 
     /// Creates an orthographic projection.

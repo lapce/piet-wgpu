@@ -38,7 +38,7 @@ impl FromStr for Svg {
 
         re_opt.fontdb.load_system_fonts();
 
-        match usvg::Tree::from_str(s, &re_opt) {
+        match usvg::Tree::from_str(s, &re_opt.to_ref()) {
             Ok(tree) => Ok(Self { hash, tree }),
             Err(err) => Err(err.into()),
         }
