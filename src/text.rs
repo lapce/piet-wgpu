@@ -279,6 +279,7 @@ impl WgpuTextLayout {
             return;
         }
 
+        let translate = [translate[0].round(), translate[1].round()];
         let offset = ctx.geometry.vertices.len() as u32;
         let primivite_id = (ctx.primitives.len() - 1) as u32;
         let mut vertices = geometry
