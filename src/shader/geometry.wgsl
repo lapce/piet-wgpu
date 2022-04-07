@@ -44,6 +44,11 @@ struct VertexOutput {
     [[location(7)]] clip_rect: vec4<f32>;
 };
 
+struct FragmentOutput {
+    [[location(0)]] color: vec4<f32>;
+    [[location(1)]] mask: vec4<f32>;
+};
+
 [[stage(vertex)]]
 fn vs_main(input: VertexInput) -> VertexOutput {
     let primitive = primitives.data[input.v_primitive_id];
@@ -102,6 +107,33 @@ fn box_shadow(lower: vec2<f32>, upper: vec2<f32>, point: vec2<f32>, radius: f32)
     return (integral.z - integral.x) * (integral.w - integral.y);
 }
 
+fn luma(color: vec4<f32>) -> f32 {
+    return color.x * 0.25 + color.y * 0.72 + color.z * 0.075;
+}
+
+fn gamma_correct(luma: f32, alpha: f32, gamma: f32, contrast: f32) -> f32 {
+    var inverse_luma: f32 = 1.0 - luma;
+    var inverse_alpha: f32 = 1.0 - alpha;
+    var g: f32 = pow(luma * alpha + inverse_luma * inverse_alpha, gamma);
+    var a: f32 = (g - inverse_luma) / (luma - inverse_luma);
+    a = a + ((1.0 - a) * contrast * a);
+    return clamp(a, 0.0, 1.0);
+}
+
+fn gamma_correct_subpx(color: vec4<f32>, mask: vec4<f32>) -> vec4<f32> {
+    var l: f32 = luma(color);
+    var inverse_luma: f32 = 1.0 - l;
+    var gamma: f32 = mix(1.0 / 1.2, 1.0 / 2.4, inverse_luma);
+    var contrast: f32 = mix(0.1, 0.8, inverse_luma);
+    return vec4<f32>(
+        gamma_correct(l, mask.x * color.w, gamma, contrast),
+        gamma_correct(l, mask.y * color.w, gamma, contrast),
+        gamma_correct(l, mask.z * color.w, gamma, contrast),
+        1.0
+    );
+}
+
+
 [[stage(fragment)]]
 fn fs_main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
     var color: vec4<f32> = input.color;
@@ -119,12 +151,9 @@ fn fs_main(input: VertexOutput) -> [[location(0)]] vec4<f32> {
         }
     }
 
-    var alpha: f32 = textureSample(font_tex, font_sampler, input.tex_pos).r;
+    var alpha: vec4<f32> = textureSample(font_tex, font_sampler, input.tex_pos);
     if (input.tex > 0.0) {
-        if (alpha <= 0.0) {
-            discard;
-        }
-        color.w = color.w * alpha;
+        color.w = color.w * alpha.x;
     }
     
     if (input.clip > 0.0) {

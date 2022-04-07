@@ -1,11 +1,16 @@
+mod blur_quad;
 mod context;
 mod font;
 mod layer;
 mod pipeline;
+mod quad;
 mod svg;
 mod text;
+mod text_layout;
 mod transformation;
+mod triangle;
 
+use glow::HasContext;
 use log::info;
 pub use piet::kurbo;
 use piet::kurbo::Size;
@@ -16,7 +21,7 @@ use svg::SvgStore;
 use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 
 use context::{WgpuImage, WgpuRenderContext};
-use text::{WgpuText, WgpuTextLayout, WgpuTextLayoutBuilder};
+use text_layout::{WgpuText, WgpuTextLayout, WgpuTextLayoutBuilder};
 
 pub type Piet<'a> = WgpuRenderContext<'a>;
 
@@ -31,137 +36,62 @@ pub type PietTextLayoutBuilder = WgpuTextLayoutBuilder;
 pub type PietImage = WgpuImage;
 
 pub struct WgpuRenderer {
-    instance: wgpu::Instance,
-    device: Rc<wgpu::Device>,
-    surface: wgpu::Surface,
-    queue: wgpu::Queue,
-    format: wgpu::TextureFormat,
-    staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
-    local_pool: futures::executor::LocalPool,
-    msaa: wgpu::TextureView,
+    gl: Rc<glow::Context>,
     size: Size,
+    scale: f32,
     svg_store: SvgStore,
 
     text: WgpuText,
 
-    pipeline: pipeline::Pipeline,
-    pub(crate) encoder: Rc<RefCell<Option<wgpu::CommandEncoder>>>,
+    quad_pipeline: quad::Pipeline,
+    blur_quad_pipeline: blur_quad::Pipeline,
+    triangle_pipeline: triangle::Pipeline,
+    text_pipeline: text::Pipeline,
 }
 
 impl WgpuRenderer {
-    pub fn new<W: raw_window_handle::HasRawWindowHandle>(window: &W) -> Result<Self, piet::Error> {
-        let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
-        let instance = wgpu::Instance::new(backend);
-        let surface = unsafe { instance.create_surface(window) };
-        let adapter =
-            futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            }))
-            .ok_or(piet::Error::NotSupported)?;
-        info!("{:?}", adapter.get_info());
+    pub fn new(
+        context: &glutin::ContextWrapper<glutin::PossiblyCurrent, glutin::window::Window>,
+    ) -> Result<Self, piet::Error> {
+        let gl = unsafe {
+            glow::Context::from_loader_function(|s| context.get_proc_address(s) as *const _)
+        };
 
-        let (device, queue) = futures::executor::block_on(
-            adapter.request_device(&wgpu::DeviceDescriptor::default(), None),
-        )
-        .map_err(|e| piet::Error::BackendError(Box::new(e)))?;
-
-        let format = surface
-            .get_preferred_format(&adapter)
-            .ok_or(piet::Error::MissingFeature("no supported texture format"))?;
-
-        let staging_belt = wgpu::util::StagingBelt::new(1024);
-        let local_pool = futures::executor::LocalPool::new();
-
-        let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Multisampled frame descriptor"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 4,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        });
-        let msaa = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let staging_belt = Rc::new(RefCell::new(staging_belt));
-        let encoder = Rc::new(RefCell::new(None));
-        let device = Rc::new(device);
-        let text = WgpuText::new(device.clone(), staging_belt.clone(), encoder.clone());
-        let pipeline = pipeline::Pipeline::new(&device, format, &text.cache.borrow());
+        let gl = Rc::new(gl);
+        let text = WgpuText::new(gl.clone());
+        let quad_pipeline = quad::Pipeline::new(&gl);
+        let blur_quad_pipeline = blur_quad::Pipeline::new(&gl);
+        let triangle_pipeline = triangle::Pipeline::new(&gl);
+        let text_pipeline = text::Pipeline::new(&gl, text.cache.clone());
 
         Ok(Self {
-            instance,
-            device,
-            queue,
-            surface,
+            gl,
             text,
             size: Size::ZERO,
-            format,
-            staging_belt,
-            local_pool,
-            msaa,
-            pipeline,
             svg_store: SvgStore::new(),
-            encoder,
+            quad_pipeline,
+            blur_quad_pipeline,
+            triangle_pipeline,
+            text_pipeline,
+            scale: 1.0,
         })
     }
 
     pub fn set_size(&mut self, size: Size) {
         self.size = size;
-        let sc_desc = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: self.format,
-            width: size.width as u32,
-            height: size.height as u32,
-            present_mode: wgpu::PresentMode::Fifo,
-        };
-        self.surface.configure(&self.device, &sc_desc);
-        let msaa_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Multisampled frame descriptor"),
-            size: wgpu::Extent3d {
-                width: size.width as u32,
-                height: size.height as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 4,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        });
-        self.msaa = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.pipeline.size = size;
+        unsafe {
+            self.gl
+                .viewport(0, 0, self.size.width as i32, self.size.height as i32);
+        }
     }
 
     pub fn set_scale(&mut self, scale: f64) {
-        self.pipeline.scale = scale;
         self.text.cache.borrow_mut().scale = scale;
+        self.scale = scale as f32;
     }
 
     pub fn text(&self) -> WgpuText {
         self.text.clone()
-    }
-
-    pub(crate) fn ensure_encoder(&mut self) {
-        let mut encoder = self.encoder.borrow_mut();
-        if encoder.is_none() {
-            *encoder = Some(
-                self.device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("render"),
-                    }),
-            );
-        }
-    }
-
-    pub(crate) fn take_encoder(&mut self) -> wgpu::CommandEncoder {
-        self.encoder.take().unwrap()
     }
 }
 

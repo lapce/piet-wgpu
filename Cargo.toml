@@ -18,8 +18,8 @@ linked-hash-map = "0.5.4"
 pathfinder_geometry = "0.5.1"
 lyon = "0.17.5"
 piet = "0.4.0"
-wgpu = { version = "0.12.0", features = ["spirv"] }
-futures = "0.3.17"
+swash = "0.1.4"
+glow = "0.11.2"
+glutin = { git = "https://github.com/lapce/glutin", branch = "new-keyboard-all" }
 glam = "0.10"
-raw-window-handle = "0.4.2"
 bytemuck = { version = "1.7.2", features = ["derive"] }

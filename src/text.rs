@@ -1,584 +1,673 @@
-use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use font_kit::source::SystemSource;
-use lyon::lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
-    StrokeVertex, VertexBuffers,
-};
-use piet::kurbo::Line;
-use piet::Color;
+use font_kit::{family_name::FamilyName, font::Font, source::SystemSource};
+use glow::HasContext;
+use hashbrown::HashMap;
+use include_dir::{include_dir, Dir};
+use linked_hash_map::LinkedHashMap;
 use piet::{
-    kurbo::{Point, Size},
-    FontFamily, FontStyle, FontWeight, HitTestPoint, HitTestPosition, LineMetric, Text,
-    TextAttribute, TextLayout, TextLayoutBuilder, TextStorage,
+    kurbo::{Point, Rect, Size},
+    FontFamily, FontWeight,
 };
-use unicode_width::UnicodeWidthChar;
+use swash::{
+    scale::{image::Image, Render, ScaleContext, Source, StrikeWith},
+    zeno::{self, Vector},
+    CacheKey, FontRef,
+};
 
-use crate::context::{format_color, from_linear, WgpuRenderContext};
-use crate::pipeline::{Cache, GlyphMetricInfo, GlyphPosInfo, GpuVertex};
+use crate::{context::Text, pipeline::create_program};
 
-#[derive(Clone)]
-pub struct WgpuText {
-    source: Rc<RefCell<SystemSource>>,
-    glyphs: Rc<RefCell<HashMap<FontFamily, HashMap<char, Rc<(Vec<[f32; 2]>, Vec<u32>)>>>>>,
-    pub(crate) cache: Rc<RefCell<Cache>>,
-    device: Rc<wgpu::Device>,
-    staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
-    encoder: Rc<RefCell<Option<wgpu::CommandEncoder>>>,
-    fill_tess: Rc<RefCell<FillTessellator>>,
-    stroke_tess: Rc<RefCell<StrokeTessellator>>,
+const MAX_INSTANCES: usize = 100_000;
+const FONTS_DIR: Dir = include_dir!("./fonts");
+const DEFAULT_FONT: &[u8] = include_bytes!("../fonts/CascadiaCode-Regular.otf");
+const IS_MACOS: bool = cfg!(target_os = "macos");
+const SOURCES: &[Source] = &[
+    Source::ColorBitmap(StrikeWith::BestFit),
+    Source::ColorOutline(0),
+    Source::Outline,
+];
+
+pub struct Pipeline {
+    program: <glow::Context as HasContext>::Program,
+    vertex_array: <glow::Context as HasContext>::VertexArray,
+    instances: <glow::Context as HasContext>::Buffer,
+    scale_location: <glow::Context as HasContext>::UniformLocation,
+    view_proj: <glow::Context as HasContext>::UniformLocation,
+    depth_location: <glow::Context as HasContext>::UniformLocation,
+    cache: Rc<RefCell<Cache>>,
+    current_scale: f32,
 }
 
-impl WgpuText {
-    pub(crate) fn new(
-        device: Rc<wgpu::Device>,
-        staging_belt: Rc<RefCell<wgpu::util::StagingBelt>>,
-        encoder: Rc<RefCell<Option<wgpu::CommandEncoder>>>,
-    ) -> Self {
+impl Pipeline {
+    pub fn new(gl: &glow::Context, cache: Rc<RefCell<Cache>>) -> Self {
+        let program = unsafe {
+            create_program(
+                gl,
+                &[
+                    (glow::VERTEX_SHADER, include_str!("./shader/text.vert")),
+                    (glow::FRAGMENT_SHADER, include_str!("./shader/text.frag")),
+                ],
+            )
+        };
+
+        let scale_location =
+            unsafe { gl.get_uniform_location(program, "u_scale") }.expect("Get scale location");
+        let depth_location =
+            unsafe { gl.get_uniform_location(program, "u_depth") }.expect("Get depth location");
+        let view_proj = unsafe { gl.get_uniform_location(program, "view_proj") }
+            .expect("Get view_proj location");
+
+        unsafe {
+            gl.use_program(Some(program));
+
+            gl.uniform_1_f32(Some(&scale_location), 1.0);
+
+            gl.use_program(None);
+        }
+
+        let (vertex_array, instances) = unsafe { create_instance_buffer(gl, MAX_INSTANCES) };
+
         Self {
-            source: Rc::new(RefCell::new(SystemSource::new())),
-            glyphs: Rc::new(RefCell::new(HashMap::new())),
-            cache: Rc::new(RefCell::new(Cache::new(&device, 2000, 2000))),
-            device,
-            staging_belt,
-            encoder,
-            fill_tess: Rc::new(RefCell::new(FillTessellator::new())),
-            stroke_tess: Rc::new(RefCell::new(StrokeTessellator::new())),
+            vertex_array,
+            instances,
+            program,
+            cache,
+            scale_location,
+            depth_location,
+            view_proj,
+            current_scale: 1.0,
         }
     }
 
+    pub fn draw(
+        &mut self,
+        gl: &glow::Context,
+        instances: &[Text],
+        scale: f32,
+        view_proj: &[f32],
+        max_depth: u32,
+    ) {
+        if instances.is_empty() {
+            return;
+        }
+
+        unsafe {
+            gl.use_program(Some(self.program));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.cache.borrow().gl_texture));
+            gl.bind_vertex_array(Some(self.vertex_array));
+            gl.uniform_matrix_4_f32_slice(Some(&self.view_proj), false, view_proj);
+            gl.uniform_1_f32(Some(&self.depth_location), max_depth as f32);
+        }
+
+        if scale != self.current_scale {
+            unsafe {
+                gl.uniform_1_f32(Some(&self.scale_location), scale);
+            }
+
+            self.current_scale = scale;
+        }
+
+        unsafe {
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instances));
+            gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, bytemuck::cast_slice(instances));
+            gl.bind_buffer(glow::ARRAY_BUFFER, None);
+
+            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, instances.len() as i32);
+            gl.bind_vertex_array(None);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.use_program(None);
+        }
+    }
+}
+
+unsafe fn create_instance_buffer(
+    gl: &glow::Context,
+    size: usize,
+) -> (
+    <glow::Context as HasContext>::VertexArray,
+    <glow::Context as HasContext>::Buffer,
+) {
+    let vertex_array = gl.create_vertex_array().expect("Create vertex array");
+    let buffer = gl.create_buffer().expect("Create instance buffer");
+
+    gl.bind_vertex_array(Some(vertex_array));
+    gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+    gl.buffer_data_size(
+        glow::ARRAY_BUFFER,
+        (size * std::mem::size_of::<Text>()) as i32,
+        glow::DYNAMIC_DRAW,
+    );
+
+    let stride = std::mem::size_of::<Text>() as i32;
+
+    gl.enable_vertex_attrib_array(0);
+    gl.vertex_attrib_pointer_f32(0, 4, glow::FLOAT, false, stride, 0);
+    gl.vertex_attrib_divisor(0, 1);
+
+    gl.enable_vertex_attrib_array(1);
+    gl.vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, stride, 4 * 4);
+    gl.vertex_attrib_divisor(1, 1);
+
+    gl.enable_vertex_attrib_array(2);
+    gl.vertex_attrib_pointer_f32(2, 4, glow::FLOAT, false, stride, 4 * (4 + 4));
+    gl.vertex_attrib_divisor(2, 1);
+
+    gl.enable_vertex_attrib_array(3);
+    gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 4 * (4 + 4 + 4));
+    gl.vertex_attrib_divisor(3, 1);
+
+    gl.enable_vertex_attrib_array(4);
+    gl.vertex_attrib_pointer_f32(4, 4, glow::FLOAT, false, stride, 4 * (4 + 4 + 4 + 1));
+    gl.vertex_attrib_divisor(4, 1);
+
+    gl.bind_vertex_array(None);
+    gl.bind_buffer(glow::ARRAY_BUFFER, None);
+
+    (vertex_array, buffer)
+}
+
+struct Row {
+    y: u32,
+    height: u32,
+    width: u32,
+    glyphs: Vec<GlyphPosInfo>,
+}
+
+pub struct Cache {
+    pub gl_texture: glow::Texture,
+    width: u32,
+    height: u32,
+    scx: ScaleContext,
+
+    font_source: SystemSource,
+    fonts: Vec<Font>,
+    piet_fonts: Vec<PietFont>,
+    default_font: Font,
+    default_piet_font: PietFont,
+    fallback_fonts_range: std::ops::Range<usize>,
+    fallback_fonts_loaded: bool,
+    font_families: HashMap<(FontFamily, FontWeight), usize>,
+
+    glyph_image: Image,
+
+    rows: LinkedHashMap<usize, Row>,
+    glyphs: HashMap<GlyphInfo, (usize, usize)>,
+    glyph_infos: HashMap<(char, FontFamily, FontWeight), (usize, u32)>,
+    pub(crate) scale: f64,
+}
+
+fn get_fallback_fonts() -> Vec<Font> {
+    let mut fonts = Vec::new();
+    for file in FONTS_DIR.files() {
+        if let Ok(font) = Font::from_bytes(Arc::new(file.contents().to_vec()), 0) {
+            fonts.push(font);
+        }
+    }
+    fonts
+}
+
+impl Cache {
+    pub fn new(gl: &glow::Context, width: u32, height: u32) -> Cache {
+        let gl_texture = unsafe {
+            let handle = gl.create_texture().expect("Create glyph cache texture");
+
+            gl.bind_texture(glow::TEXTURE_2D, Some(handle));
+
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                None,
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+
+            handle
+        };
+
+        let default_font = Font::from_bytes(Arc::new(DEFAULT_FONT.to_vec()), 0).unwrap();
+        let default_piet_font = PietFont::from_data(DEFAULT_FONT);
+
+        Cache {
+            gl_texture,
+            width,
+            height,
+
+            scx: ScaleContext::new(),
+
+            font_source: SystemSource::new(),
+
+            font_families: HashMap::new(),
+            fonts: Vec::new(),
+            piet_fonts: Vec::new(),
+            default_font,
+            default_piet_font,
+            fallback_fonts_range: 0..0,
+            fallback_fonts_loaded: false,
+
+            glyph_image: Image::new(),
+
+            rows: LinkedHashMap::new(),
+            glyphs: HashMap::new(),
+            glyph_infos: HashMap::new(),
+            scale: 1.0,
+        }
+    }
+
+    fn get_glyph_from_fallback_fonts(&mut self, c: char) -> Option<(usize, u32)> {
+        if !self.fallback_fonts_loaded {
+            self.fallback_fonts_loaded = true;
+            let mut fallback_fonts = get_fallback_fonts();
+            let start = self.fonts.len();
+            let end = start + fallback_fonts.len();
+            self.fonts.append(&mut fallback_fonts);
+            self.fallback_fonts_range = start..end;
+        }
+        if self.fallback_fonts_range.clone().count() == 0 {
+            return None;
+        }
+
+        for font_id in self.fallback_fonts_range.clone() {
+            let font = &self.fonts[font_id];
+            if let Some(glyph_id) = font.glyph_for_char(c) {
+                return Some((font_id, glyph_id));
+            }
+        }
+        None
+    }
+
+    fn get_glyph_info(
+        &mut self,
+        c: char,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+        font_size: u32,
+    ) -> Result<GlyphInfo, piet::Error> {
+        let key = (c, font_family.clone(), font_weight);
+        if !self.glyph_infos.contains_key(&key) {
+            let font_id = self.get_font_by_family(font_family, font_weight);
+            let font = &self.fonts[font_id];
+
+            let (font_id, glyph_id) = if let Some(glyph_id) = font.glyph_for_char(c) {
+                (font_id, glyph_id)
+            } else {
+                self.get_glyph_from_fallback_fonts(c)
+                    .ok_or(piet::Error::MissingFont)?
+            };
+
+            self.glyph_infos.insert(key.clone(), (font_id, glyph_id));
+        }
+
+        let (font_id, glyph_id) = self.glyph_infos.get(&key).unwrap();
+
+        Ok(GlyphInfo {
+            font_id: *font_id,
+            font_size,
+            glyph_id: *glyph_id,
+        })
+    }
+
     pub(crate) fn get_glyph_pos(
-        &self,
+        &mut self,
         c: char,
         font_family: FontFamily,
         font_size: f32,
         font_weight: FontWeight,
-    ) -> Result<GlyphPosInfo, piet::Error> {
-        let mut encoder = self.encoder.borrow_mut();
-        if encoder.is_none() {
-            *encoder = Some(
-                self.device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("render"),
-                    }),
-            );
+        gl: &glow::Context,
+    ) -> Result<&GlyphPosInfo, piet::Error> {
+        let scale = self.scale;
+
+        let font_size = (font_size as f64 * scale).round() as u32;
+        let glyph = self.get_glyph_info(c, font_family.clone(), font_weight, font_size)?;
+
+        if let Some((row, index)) = self.glyphs.get(&glyph) {
+            let row = self.rows.get(row).unwrap();
+            return Ok(&row.glyphs[*index]);
         }
 
-        let mut cache = self.cache.borrow_mut();
-        cache
-            .get_glyph_pos(
-                c,
-                font_family,
-                font_size,
-                font_weight,
-                &self.device,
-                &mut self.staging_belt.borrow_mut(),
-                encoder.as_mut().unwrap(),
+        let padding = 2.0;
+        let font = &self.fonts[glyph.font_id];
+        let font_metrics = font.metrics();
+        let units_per_em = font_metrics.units_per_em as f32;
+        let glyph_real_width =
+            font.advance(glyph.glyph_id).unwrap().x() / units_per_em * font_size as f32;
+        let glyph_real_height =
+            (font_metrics.ascent - font_metrics.descent + font_metrics.line_gap) / units_per_em
+                * font_size as f32;
+        let glyph_metric = GlyphMetricInfo {
+            ascent: (font_metrics.ascent / units_per_em * font_size as f32) as f64 / scale,
+            descent: (font_metrics.descent / units_per_em * font_size as f32) as f64 / scale,
+            line_gap: (font_metrics.line_gap / units_per_em * font_size as f32) as f64 / scale,
+            mono: font.is_monospace(),
+        };
+        let glyph_rect = Size::new(glyph_real_width as f64, glyph_real_height as f64).to_rect();
+
+        let glyph_width = glyph_real_width.ceil() as u32 + padding as u32;
+        let glyph_height = glyph_real_height.ceil() as u32 + padding as u32;
+
+        let x = 0.0;
+        let y = 0.0;
+        let subpx = [SubpixelOffset::quantize(x), SubpixelOffset::quantize(y)];
+
+        let piet_font = &self.piet_fonts[glyph.font_id];
+
+        let mut scaler = self
+            .scx
+            .builder(piet_font.as_ref())
+            .hint(!IS_MACOS)
+            .size(font_size as f32)
+            .build();
+
+        let embolden = if IS_MACOS { 0.2 } else { 0. };
+
+        self.glyph_image.data.clear();
+        Render::new(SOURCES)
+            .format(zeno::Format::CustomSubpixel([0.3, 0., -0.3]))
+            .offset(Vector::new(subpx[0].to_f32(), subpx[1].to_f32()))
+            .embolden(embolden)
+            .render_into(&mut scaler, glyph.glyph_id as u16, &mut self.glyph_image);
+
+        let mut offset = [0, 0];
+        let mut inserted = false;
+        for (row_number, row) in self.rows.iter_mut().rev() {
+            if row.height == glyph_height {
+                if self.width - row.width > glyph_width {
+                    let origin = Point::new(
+                        row.width as f64 + padding as f64 / 2.0,
+                        row.y as f64 + padding as f64 / 2.0,
+                    );
+                    let glyph_pos = glyph_rect_to_pos(
+                        glyph_rect,
+                        origin,
+                        &glyph,
+                        &glyph_metric,
+                        scale,
+                        [self.width, self.height],
+                    );
+
+                    row.glyphs.push(glyph_pos);
+                    offset[0] = row.width;
+                    offset[1] = row.y;
+                    row.width += glyph_width;
+                    self.glyphs
+                        .insert(glyph.clone(), (*row_number, row.glyphs.len() - 1));
+                    inserted = true;
+                    break;
+                }
+            }
+        }
+
+        if !inserted {
+            let mut y = 0;
+            if self.rows.len() > 0 {
+                let last_row = self.rows.get(&(self.rows.len() - 1)).unwrap();
+                y = last_row.y + last_row.height;
+            }
+            if self.height < y + glyph_height {
+                return Err(piet::Error::MissingFont);
+            }
+
+            let origin = Point::new(0.0 + padding as f64 / 2.0, y as f64 + padding as f64 / 2.0);
+            let glyph_pos = glyph_rect_to_pos(
+                glyph_rect,
+                origin,
+                &glyph,
+                &glyph_metric,
+                scale,
+                [self.width, self.height],
+            );
+
+            offset[0] = 0;
+            offset[1] = y;
+            let new_row = self.rows.len();
+            let glyphs = vec![glyph_pos];
+            let row = Row {
+                y,
+                height: glyph_height,
+                width: glyph_width,
+                glyphs,
+            };
+
+            self.rows.insert(new_row, row);
+            self.glyphs.insert(glyph.clone(), (new_row, 0));
+        }
+
+        self.update(
+            gl,
+            offset,
+            [
+                glyph_real_width.ceil() as u32,
+                (glyph_metric.ascent * scale).ceil() as u32,
+            ],
+        );
+
+        let (row, index) = self.glyphs.get(&glyph).unwrap();
+        let row = self.rows.get(row).unwrap();
+        Ok(&row.glyphs[*index])
+    }
+
+    fn get_font_by_family(&mut self, family: FontFamily, weight: FontWeight) -> usize {
+        if !self.font_families.contains_key(&(family.clone(), weight)) {
+            let (font, piet_font) = self.get_new_font(&family, weight);
+            let font_id = self.fonts.len();
+            self.font_families.insert((family.clone(), weight), font_id);
+            self.fonts.push(font);
+            self.piet_fonts.push(piet_font);
+        }
+
+        let font_id = self.font_families.get(&(family, weight)).unwrap();
+        *font_id
+    }
+
+    fn get_new_font(&self, family: &FontFamily, weight: FontWeight) -> (Font, PietFont) {
+        let family_name = match family.inner() {
+            piet::FontFamilyInner::Serif => FamilyName::Serif,
+            piet::FontFamilyInner::SansSerif => FamilyName::SansSerif,
+            piet::FontFamilyInner::Monospace => FamilyName::Monospace,
+            piet::FontFamilyInner::SystemUi => FamilyName::SansSerif,
+            piet::FontFamilyInner::Named(name) => {
+                font_kit::family_name::FamilyName::Title(name.to_string())
+            }
+            _ => FamilyName::SansSerif,
+        };
+        let font = self
+            .font_source
+            .select_best_match(
+                &[family_name],
+                &font_kit::properties::Properties::new()
+                    .weight(font_kit::properties::Weight(weight.to_raw() as f32)),
             )
-            .map(|p| p.clone())
+            .ok()
+            .and_then(|h| h.load().ok())
+            .unwrap_or_else(|| self.default_font.clone());
+        let piet_font = font
+            .copy_font_data()
+            .map(|d| PietFont::from_data(&d))
+            .unwrap_or_else(|| self.default_piet_font.clone());
+        (font, piet_font)
+    }
+
+    pub fn update(&mut self, gl: &glow::Context, offset: [u32; 2], size: [u32; 2]) {
+        let width = self.glyph_image.placement.width;
+        let height = self.glyph_image.placement.height;
+
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.gl_texture));
+
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                offset[0] as i32 + self.glyph_image.placement.left + 1,
+                offset[1] as i32 + (size[1] as i32 - self.glyph_image.placement.top),
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(&self.glyph_image.data),
+            );
+
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Default)]
+pub(crate) struct GlyphInfo {
+    font_id: usize,
+    glyph_id: u32,
+    font_size: u32,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct GlyphMetricInfo {
+    pub(crate) ascent: f64,
+    pub(crate) descent: f64,
+    pub(crate) line_gap: f64,
+    pub(crate) mono: bool,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct GlyphPosInfo {
+    pub(crate) info: GlyphInfo,
+    pub(crate) metric: GlyphMetricInfo,
+    pub(crate) width: f64,
+    pub(crate) rect: Rect,
+    pub(crate) cache_rect: Rect,
+}
+
+impl GlyphPosInfo {
+    pub fn empty(width: f64) -> Self {
+        GlyphPosInfo {
+            info: GlyphInfo {
+                font_id: 0,
+                glyph_id: 0,
+                font_size: 0,
+            },
+            metric: GlyphMetricInfo {
+                ascent: 0.0,
+                descent: 0.0,
+                line_gap: 0.0,
+                mono: false,
+            },
+            width: width,
+            rect: Size::new(width, 0.0).to_rect(),
+            cache_rect: Rect::ZERO,
+        }
+    }
+}
+
+fn glyph_rect_to_pos(
+    glyph_rect: Rect,
+    origin: Point,
+    glyph: &GlyphInfo,
+    glyph_metric: &GlyphMetricInfo,
+    scale: f64,
+    size: [u32; 2],
+) -> GlyphPosInfo {
+    let glyph_rect = glyph_rect.with_origin(origin);
+    let mut cache_rect = glyph_rect.clone();
+    cache_rect.x0 /= size[0] as f64;
+    cache_rect.x1 /= size[0] as f64;
+    cache_rect.y0 /= size[1] as f64;
+    cache_rect.y1 /= size[1] as f64;
+    let glyph_pos = GlyphPosInfo {
+        info: glyph.clone(),
+        rect: glyph_rect.with_size(Size::new(
+            glyph_rect.size().width / scale,
+            glyph_rect.size().height / scale,
+        )),
+        width: glyph_rect.size().width / scale,
+        metric: glyph_metric.clone(),
+        cache_rect,
+    };
+    glyph_pos
+}
+
+#[derive(Hash, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum SubpixelOffset {
+    Zero = 0,
+    Quarter = 1,
+    Half = 2,
+    ThreeQuarters = 3,
+}
+
+impl SubpixelOffset {
+    // Skia quantizes subpixel offsets into 1/4 increments.
+    // Given the absolute position, return the quantized increment
+    fn quantize(pos: f32) -> Self {
+        // Following the conventions of Gecko and Skia, we want
+        // to quantize the subpixel position, such that abs(pos) gives:
+        // [0.0, 0.125) -> Zero
+        // [0.125, 0.375) -> Quarter
+        // [0.375, 0.625) -> Half
+        // [0.625, 0.875) -> ThreeQuarters,
+        // [0.875, 1.0) -> Zero
+        // The unit tests below check for this.
+        let apos = ((pos - pos.floor()) * 8.0) as i32;
+        match apos {
+            1..=2 => SubpixelOffset::Quarter,
+            3..=4 => SubpixelOffset::Half,
+            5..=6 => SubpixelOffset::ThreeQuarters,
+            _ => SubpixelOffset::Zero,
+        }
+    }
+
+    fn to_f32(self) -> f32 {
+        match self {
+            SubpixelOffset::Zero => 0.0,
+            SubpixelOffset::Quarter => 0.25,
+            SubpixelOffset::Half => 0.5,
+            SubpixelOffset::ThreeQuarters => 0.75,
+        }
     }
 }
 
 #[derive(Clone)]
-pub struct WgpuTextLayout {
-    state: WgpuText,
-    text: String,
-    width: f64,
-    attrs: Rc<Attributes>,
-    ref_glyph: Rc<RefCell<GlyphPosInfo>>,
-    glyphs: Rc<RefCell<Vec<GlyphPosInfo>>>,
-    geometry: Rc<RefCell<VertexBuffers<GpuVertex, u32>>>,
+struct PietFont {
+    data: Arc<Vec<u8>>,
+    key: CacheKey,
 }
 
-impl WgpuTextLayout {
-    pub fn new(text: String, state: WgpuText) -> Self {
-        let char_number = text.chars().count();
-        let num_vertices = char_number * 4;
-        let num_indices = char_number * 6;
+impl PietFont {
+    fn from_data(data: &[u8]) -> Self {
         Self {
-            state,
-            text,
-            width: f64::MAX,
-            attrs: Rc::new(Attributes::default()),
-            glyphs: Rc::new(RefCell::new(Vec::new())),
-            ref_glyph: Rc::new(RefCell::new(GlyphPosInfo::default())),
-            geometry: Rc::new(RefCell::new(VertexBuffers::with_capacity(
-                num_vertices,
-                num_indices,
-            ))),
+            data: Arc::new(data.to_vec()),
+            key: CacheKey::new(),
         }
     }
 
-    fn set_width(&mut self, width: f64) {
-        self.width = width;
-    }
-
-    fn set_attrs(&mut self, attrs: Attributes) {
-        self.attrs = Rc::new(attrs);
-    }
-
-    pub fn set_color(&self, color: &Color) {
-        let color = format_color(&color);
-        for v in self.geometry.borrow_mut().vertices.iter_mut() {
-            v.color = color;
+    pub fn as_ref(&self) -> FontRef {
+        FontRef {
+            data: &self.data,
+            offset: 0,
+            key: self.key,
         }
-    }
-
-    pub(crate) fn rebuild(&self, is_mono: bool, tab_width: usize, bounds: Option<[f64; 2]>) {
-        let font_family = self.attrs.defaults.font.clone();
-        let font_size = self.attrs.defaults.font_size;
-        let font_weight = self.attrs.defaults.weight;
-        if let Ok(glyph_pos) =
-            self.state
-                .get_glyph_pos('W', font_family.clone(), font_size as f32, font_weight)
-        {
-            *self.ref_glyph.borrow_mut() = glyph_pos.clone();
-        }
-
-        let mono_width = self.ref_glyph.borrow().rect.width();
-
-        let len = self.text.chars().count();
-
-        let mut glyphs = self.glyphs.borrow_mut();
-        glyphs.clear();
-        glyphs.reserve(len);
-        let mut geometry = self.geometry.borrow_mut();
-        geometry.vertices.clear();
-        geometry.indices.clear();
-        geometry.vertices.reserve(4 * len);
-        geometry.indices.reserve(6 * len);
-
-        let mut x = 0.0;
-        let mut y = 0.0;
-        let mut max_height = 0.0;
-        let mut index = 0;
-        let mut mono_char_widths = 0;
-        for c in self.text.chars() {
-            let font_family = self.attrs.font(index);
-            let font_size = self.attrs.size(index) as f32;
-            let font_weight = self.attrs.font_weight(index);
-            let color = self.attrs.color(index);
-            index += c.len_utf8();
-
-            let default_width = if is_mono {
-                let char_width = if c == '\t' {
-                    tab_width - mono_char_widths % tab_width
-                } else {
-                    UnicodeWidthChar::width(c).unwrap_or(1)
-                };
-                mono_char_widths += char_width;
-                let width = char_width as f32 * mono_width as f32;
-                width
-            } else {
-                let char_width = if c == '\t' {
-                    tab_width
-                } else {
-                    UnicodeWidthChar::width(c).unwrap_or(1)
-                };
-                let width = char_width as f32 * mono_width as f32;
-                width
-            };
-
-            let color = format_color(&color);
-            let mut glyph_pos = self
-                .state
-                .get_glyph_pos(c, font_family, font_size, font_weight)
-                .map(|g| g.clone())
-                .unwrap_or_else(|_| GlyphPosInfo::empty(default_width as f64));
-            let width = if is_mono {
-                glyph_pos.width = default_width as f64;
-                default_width
-            } else {
-                glyph_pos.rect.width() as f32
-            };
-
-            if (x + width) as f64 > self.width {
-                x = 0.0;
-                y += max_height;
-            }
-
-            glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
-
-            let new_x = x + width;
-
-            let height = glyph_pos.rect.height() as f32;
-            if height > max_height {
-                max_height = height;
-            }
-
-            if let Some(bounds) = bounds.as_ref() {
-                if x > bounds[1] as f32 {
-                    return;
-                }
-                if new_x < bounds[0] as f32 {
-                    x = new_x;
-                    glyphs.push(glyph_pos);
-                    continue;
-                }
-            }
-
-            if c == ' ' || c == '\n' || c == '\t' {
-                x = new_x;
-                glyphs.push(glyph_pos);
-                continue;
-            }
-
-            let rect = &glyph_pos.rect;
-            let cache_rect = &glyph_pos.cache_rect;
-            let mut vertices = vec![
-                GpuVertex {
-                    pos: [rect.x0 as f32, rect.y0 as f32],
-                    tex: 1.0,
-                    tex_pos: [cache_rect.x0 as f32, cache_rect.y0 as f32],
-                    color,
-                    ..Default::default()
-                },
-                GpuVertex {
-                    pos: [rect.x0 as f32, rect.y1 as f32],
-                    tex: 1.0,
-                    tex_pos: [cache_rect.x0 as f32, cache_rect.y1 as f32],
-                    color,
-                    ..Default::default()
-                },
-                GpuVertex {
-                    pos: [rect.x1 as f32, rect.y1 as f32],
-                    tex: 1.0,
-                    tex_pos: [cache_rect.x1 as f32, cache_rect.y1 as f32],
-                    color,
-                    ..Default::default()
-                },
-                GpuVertex {
-                    pos: [rect.x1 as f32, rect.y0 as f32],
-                    tex: 1.0,
-                    tex_pos: [cache_rect.x1 as f32, cache_rect.y0 as f32],
-                    color,
-                    ..Default::default()
-                },
-            ];
-            let offset = geometry.vertices.len() as u32;
-            let mut indices = vec![
-                offset + 0,
-                offset + 1,
-                offset + 2,
-                offset + 0,
-                offset + 2,
-                offset + 3,
-            ];
-
-            geometry.vertices.append(&mut vertices);
-            geometry.indices.append(&mut indices);
-
-            x = new_x;
-            glyphs.push(glyph_pos);
-        }
-    }
-
-    pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, translate: [f32; 2]) {
-        let geometry = self.geometry.borrow();
-        if geometry.vertices.len() == 0 {
-            return;
-        }
-
-        let offset = ctx.geometry.vertices.len() as u32;
-        let primivite_id = (ctx.primitives.len() - 1) as u32;
-        let mut vertices = geometry
-            .vertices
-            .iter()
-            .map(|v| {
-                let mut v = v.clone();
-                v.translate = translate;
-                v.primitive_id = primivite_id;
-                v
-            })
-            .collect();
-        let mut indices = geometry.indices.iter().map(|i| *i + offset).collect();
-        ctx.geometry.vertices.append(&mut vertices);
-        ctx.geometry.indices.append(&mut indices);
-    }
-
-    pub fn cursor_line_for_text_position(&self, text_pos: usize) -> Line {
-        let pos = self.hit_test_text_position(text_pos);
-        let line_metric = self.line_metric(0).unwrap();
-        let p0 = (pos.point.x, line_metric.y_offset);
-        let p1 = (pos.point.x, line_metric.y_offset + line_metric.height);
-        Line::new(p0, p1)
-    }
-}
-
-pub struct WgpuTextLayoutBuilder {
-    width: f64,
-    state: WgpuText,
-    text: String,
-    attrs: Attributes,
-}
-
-impl WgpuTextLayoutBuilder {
-    pub(crate) fn new(text: impl TextStorage, state: WgpuText) -> Self {
-        Self {
-            width: f64::MAX,
-            text: text.as_str().to_string(),
-            attrs: Default::default(),
-            state,
-        }
-    }
-
-    fn add(&mut self, attr: TextAttribute, range: Range<usize>) {
-        self.attrs.add(range, attr);
-    }
-
-    pub fn build_with_info(
-        self,
-        is_mono: bool,
-        tab_width: usize,
-        bounds: Option<[f64; 2]>,
-    ) -> WgpuTextLayout {
-        let state = self.state.clone();
-        let mut text_layout = WgpuTextLayout::new(self.text, state);
-        text_layout.set_attrs(self.attrs);
-        text_layout.set_width(self.width);
-        text_layout.rebuild(is_mono, tab_width, bounds);
-        text_layout
-    }
-
-    pub fn build_with_bounds(self, bounds: [f64; 2]) -> WgpuTextLayout {
-        let state = self.state.clone();
-        let mut text_layout = WgpuTextLayout::new(self.text, state);
-        text_layout.set_attrs(self.attrs);
-        text_layout.set_width(self.width);
-        text_layout.rebuild(false, 8, Some(bounds));
-        text_layout
-    }
-}
-
-impl Text for WgpuText {
-    type TextLayoutBuilder = WgpuTextLayoutBuilder;
-    type TextLayout = WgpuTextLayout;
-
-    fn font_family(&mut self, family_name: &str) -> Option<FontFamily> {
-        todo!()
-    }
-
-    fn load_font(&mut self, data: &[u8]) -> Result<piet::FontFamily, piet::Error> {
-        todo!()
-    }
-
-    fn new_text_layout(&mut self, text: impl piet::TextStorage) -> Self::TextLayoutBuilder {
-        let state = self.clone();
-        Self::TextLayoutBuilder::new(text, state)
-    }
-}
-
-impl TextLayoutBuilder for WgpuTextLayoutBuilder {
-    type Out = WgpuTextLayout;
-
-    fn max_width(mut self, width: f64) -> Self {
-        self.width = width;
-        self
-    }
-
-    fn alignment(self, alignment: piet::TextAlignment) -> Self {
-        self
-    }
-
-    fn default_attribute(mut self, attribute: impl Into<piet::TextAttribute>) -> Self {
-        let attribute = attribute.into();
-        self.attrs.defaults.set(attribute);
-        self
-    }
-
-    fn range_attribute(
-        mut self,
-        range: impl std::ops::RangeBounds<usize>,
-        attribute: impl Into<piet::TextAttribute>,
-    ) -> Self {
-        let range = piet::util::resolve_range(range, self.text.len());
-        let attribute = attribute.into();
-        self.add(attribute, range);
-        self
-    }
-
-    fn build(self) -> Result<Self::Out, piet::Error> {
-        let state = self.state.clone();
-        let mut text_layout = WgpuTextLayout::new(self.text, state);
-        text_layout.set_attrs(self.attrs);
-        text_layout.set_width(self.width);
-        text_layout.rebuild(false, 8, None);
-        Ok(text_layout)
-    }
-}
-
-impl TextLayout for WgpuTextLayout {
-    fn size(&self) -> Size {
-        if self.glyphs.borrow().len() == 0 {
-            let ref_glyph = self.ref_glyph.borrow();
-            Size::new(0.0, ref_glyph.rect.height())
-        } else {
-            let glyphs = self.glyphs.borrow();
-
-            let last_glyph = &glyphs[glyphs.len() - 1];
-            let width = last_glyph.rect.x0 + last_glyph.width;
-            let height = last_glyph.rect.y1;
-            Size::new(width as f64, height as f64)
-        }
-    }
-
-    fn trailing_whitespace_width(&self) -> f64 {
-        0.0
-    }
-
-    fn image_bounds(&self) -> piet::kurbo::Rect {
-        Size::ZERO.to_rect()
-    }
-
-    fn text(&self) -> &str {
-        &self.text
-    }
-
-    fn line_text(&self, line_number: usize) -> Option<&str> {
-        Some(&self.text)
-    }
-
-    fn line_metric(&self, line_number: usize) -> Option<LineMetric> {
-        let mut metric = LineMetric {
-            start_offset: 0,
-            end_offset: self.text.len(),
-            trailing_whitespace: 0,
-            baseline: 0.0,
-            height: 0.0,
-            y_offset: 0.0,
-        };
-        let glyph = &self.ref_glyph.borrow();
-        metric.baseline = glyph.metric.ascent;
-        metric.height = glyph.metric.ascent - glyph.metric.descent + glyph.metric.line_gap;
-        Some(metric)
-    }
-
-    fn line_count(&self) -> usize {
-        0
-    }
-
-    fn hit_test_point(&self, point: Point) -> HitTestPoint {
-        let mut hit = HitTestPoint::default();
-        if self.glyphs.borrow().len() == 0 {
-            return hit;
-        }
-
-        let glyphs = self.glyphs.borrow();
-        let mut index = None;
-        for (i, glyph) in glyphs.iter().enumerate() {
-            if point.x < glyph.rect.x0 + glyph.rect.width() / 2.0 {
-                index = Some(i);
-                break;
-            }
-            if point.x < glyph.rect.x1 {
-                index = Some(i + 1);
-                break;
-            }
-        }
-        hit.idx = index.unwrap_or(glyphs.len());
-        hit.is_inside = index.is_some();
-        hit
-    }
-
-    fn hit_test_text_position(&self, idx: usize) -> HitTestPosition {
-        if self.glyphs.borrow().len() == 0 {
-            return HitTestPosition::default();
-        }
-
-        let glyphs = self.glyphs.borrow();
-
-        let cur_glyph = &glyphs[idx.min(glyphs.len() - 1)];
-        let mut x = cur_glyph.rect.x0;
-        if idx >= glyphs.len() {
-            x = cur_glyph.rect.x1;
-        }
-
-        let mut pos = HitTestPosition::default();
-        pos.point = Point::new(x as f64, 0.0);
-        pos
-    }
-}
-
-#[derive(Default)]
-struct Attributes {
-    defaults: piet::util::LayoutDefaults,
-    color: Vec<Span<Color>>,
-    font: Vec<Span<FontFamily>>,
-    size: Vec<Span<f64>>,
-    weight: Vec<Span<FontWeight>>,
-    style: Option<Span<FontStyle>>,
-}
-
-/// during construction, `Span`s represent font attributes that have been applied
-/// to ranges of the text; these are combined into coretext font objects as the
-/// layout is built.
-struct Span<T> {
-    payload: T,
-    range: Range<usize>,
-}
-
-impl<T> Span<T> {
-    fn new(payload: T, range: Range<usize>) -> Self {
-        Span { payload, range }
-    }
-
-    fn range_end(&self) -> usize {
-        self.range.end
-    }
-}
-
-impl Attributes {
-    fn add(&mut self, range: Range<usize>, attr: TextAttribute) {
-        match attr {
-            TextAttribute::TextColor(color) => self.color.push(Span::new(color, range)),
-            TextAttribute::Weight(weight) => self.weight.push(Span::new(weight, range)),
-            _ => {}
-        }
-    }
-
-    fn color(&self, index: usize) -> &Color {
-        for r in &self.color {
-            if r.range.contains(&index) {
-                return &r.payload;
-            }
-        }
-        &self.defaults.fg_color
-    }
-
-    fn size(&self, index: usize) -> f64 {
-        for r in &self.size {
-            if r.range.contains(&index) {
-                return r.payload;
-            }
-        }
-        self.defaults.font_size
-    }
-
-    fn italic(&self) -> bool {
-        matches!(
-            self.style
-                .as_ref()
-                .map(|t| t.payload)
-                .unwrap_or(self.defaults.style),
-            FontStyle::Italic
-        )
-    }
-
-    fn font(&self, index: usize) -> FontFamily {
-        for r in &self.font {
-            if r.range.contains(&index) {
-                return r.payload.clone();
-            }
-        }
-        self.defaults.font.clone()
-    }
-
-    fn font_weight(&self, index: usize) -> FontWeight {
-        for r in &self.weight {
-            if r.range.contains(&index) {
-                return r.payload;
-            }
-        }
-        self.defaults.weight
     }
 }

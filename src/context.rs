@@ -3,10 +3,12 @@ use std::borrow::Cow;
 use crate::{
     pipeline::{GpuVertex, Primitive},
     svg::Svg,
-    text::{WgpuText, WgpuTextLayout},
+    text_layout::{WgpuText, WgpuTextLayout},
+    transformation::Transformation,
     WgpuRenderer,
 };
-use futures::task::SpawnExt;
+use bytemuck::{Pod, Zeroable};
+use glow::HasContext;
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
     StrokeVertex, VertexBuffers,
@@ -22,11 +24,62 @@ pub struct WgpuRenderContext<'a> {
     pub(crate) fill_tess: FillTessellator,
     pub(crate) stroke_tess: StrokeTessellator,
     pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
+    pub(crate) layer: Layer,
     inner_text: WgpuText,
     pub(crate) cur_transform: Affine,
     state_stack: Vec<State>,
-    clip_stack: Vec<Rect>,
+    clip_stack: Vec<[f32; 4]>,
     pub(crate) primitives: Vec<Primitive>,
+    pub(crate) depth: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Layer {
+    pub quads: Vec<Quad>,
+    pub transparent_quads: Vec<Quad>,
+    pub blurred_quads: Vec<BlurQuad>,
+    pub triangles: VertexBuffers<Vertex, u32>,
+    pub transparent_triangles: VertexBuffers<Vertex, u32>,
+    pub texts: Vec<Text>,
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Quad {
+    pub rect: [f32; 4],
+    pub color: [f32; 4],
+    pub depth: f32,
+    pub clip: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct BlurQuad {
+    pub rect: [f32; 4],
+    pub blur_rect: [f32; 4],
+    pub blur_radius: f32,
+    pub color: [f32; 4],
+    pub depth: f32,
+    pub clip: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Text {
+    pub rect: [f32; 4],
+    pub tex_rect: [f32; 4],
+    pub color: [f32; 4],
+    pub depth: f32,
+    pub clip: [f32; 4],
+}
+
+#[derive(Clone, Debug, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Vertex {
+    pub(crate) pos: [f32; 2],
+    pub(crate) color: [f32; 4],
+    pub(crate) depth: f32,
+    pub clip: [f32; 4],
 }
 
 #[derive(Default)]
@@ -40,12 +93,129 @@ struct State {
     n_clip: usize,
 }
 
+impl Layer {
+    fn new() -> Self {
+        Self {
+            quads: Vec::new(),
+            blurred_quads: Vec::new(),
+            triangles: VertexBuffers::new(),
+            transparent_quads: Vec::new(),
+            transparent_triangles: VertexBuffers::new(),
+            texts: Vec::new(),
+        }
+    }
+
+    fn add_quad(&mut self, rect: [f32; 4], color: [f32; 4], depth: f32, clip: [f32; 4]) {
+        let quad = Quad {
+            rect,
+            color,
+            depth,
+            clip,
+        };
+        if color[3] < 1.0 {
+            self.transparent_quads.push(quad);
+        } else {
+            self.quads.push(quad);
+        }
+    }
+
+    fn add_blurred_quad(
+        &mut self,
+        rect: [f32; 4],
+        blur_rect: [f32; 4],
+        blur_radius: f32,
+        color: [f32; 4],
+        depth: f32,
+        clip: [f32; 4],
+    ) {
+        let quad = BlurQuad {
+            rect,
+            blur_rect,
+            blur_radius,
+            color,
+            depth,
+            clip,
+        };
+        self.blurred_quads.push(quad);
+    }
+
+    pub fn add_text(&mut self, mut text: Vec<Text>) {
+        self.texts.append(&mut text);
+    }
+
+    fn draw(&self, renderer: &mut WgpuRenderer, max_depth: u32) {
+        let view_proj = create_view_proj(renderer.size.width as f32, renderer.size.height as f32);
+        let scale = renderer.scale;
+        renderer
+            .quad_pipeline
+            .draw(&renderer.gl, &self.quads, scale, &view_proj, max_depth);
+        renderer.triangle_pipeline.draw(
+            &renderer.gl,
+            &self.triangles,
+            scale,
+            &view_proj,
+            max_depth,
+        );
+
+        unsafe {
+            renderer.gl.enable(glow::BLEND);
+            renderer
+                .gl
+                .blend_func(glow::SRC1_COLOR, glow::ONE_MINUS_SRC1_COLOR);
+        }
+        renderer
+            .text_pipeline
+            .draw(&renderer.gl, &self.texts, scale, &view_proj, max_depth);
+
+        unsafe {
+            renderer.gl.enable(glow::BLEND);
+            renderer
+                .gl
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        }
+
+        renderer.blur_quad_pipeline.draw(
+            &renderer.gl,
+            &self.blurred_quads,
+            scale,
+            &view_proj,
+            max_depth,
+        );
+        renderer.quad_pipeline.draw(
+            &renderer.gl,
+            &self.transparent_quads,
+            scale,
+            &view_proj,
+            max_depth,
+        );
+        renderer.triangle_pipeline.draw(
+            &renderer.gl,
+            &self.transparent_triangles,
+            scale,
+            &view_proj,
+            max_depth,
+        );
+    }
+
+    fn reset(&mut self) {
+        self.quads.clear();
+        self.blurred_quads.clear();
+        self.triangles.vertices.clear();
+        self.triangles.indices.clear();
+        self.transparent_quads.clear();
+        self.transparent_triangles.vertices.clear();
+        self.transparent_triangles.indices.clear();
+        self.texts.clear();
+    }
+}
+
 impl<'a> WgpuRenderContext<'a> {
     pub fn new(renderer: &'a mut WgpuRenderer) -> Self {
         let text = renderer.text();
         let geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
 
         let mut context = Self {
+            layer: Layer::new(),
             renderer,
             fill_tess: FillTessellator::new(),
             stroke_tess: StrokeTessellator::new(),
@@ -55,6 +225,7 @@ impl<'a> WgpuRenderContext<'a> {
             state_stack: Vec::new(),
             clip_stack: Vec::new(),
             primitives: Vec::new(),
+            depth: 0,
         };
         context.add_primitive();
         context
@@ -64,17 +235,15 @@ impl<'a> WgpuRenderContext<'a> {
         self.clip_stack.pop();
     }
 
-    pub(crate) fn current_clip(&self) -> Option<&Rect> {
-        self.clip_stack.last()
+    pub(crate) fn current_clip(&self) -> [f32; 4] {
+        self.clip_stack.last().cloned().unwrap_or([0., 0., 0., 0.])
     }
 
     fn add_primitive(&mut self) {
         let affine = self.cur_transform.as_coeffs();
         let translate = [affine[4] as f32, affine[5] as f32];
-        let (clip, clip_rect) = self
-            .current_clip()
-            .map(|r| (1.0, [r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32]))
-            .unwrap_or((0.0, [0.0, 0.0, 0.0, 0.0]));
+        let clip = 1.0;
+        let clip_rect = self.current_clip();
         self.primitives.push(Primitive {
             translate,
             clip,
@@ -155,23 +324,41 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
 
     fn gradient(
         &mut self,
-        gradient: impl Into<piet::FixedGradient>,
+        _gradient: impl Into<piet::FixedGradient>,
     ) -> Result<Self::Brush, piet::Error> {
         todo!()
     }
 
-    fn clear(&mut self, region: impl Into<Option<Rect>>, color: Color) {}
+    fn clear(&mut self, _region: impl Into<Option<Rect>>, _color: Color) {}
 
     fn stroke(&mut self, shape: impl Shape, brush: &impl piet::IntoBrush<Self>, width: f64) {
+        let affine = self.cur_transform.as_coeffs();
+        self.depth += 1;
         let brush = brush.make_brush(self, || shape.bounding_box()).into_owned();
         let Brush::Solid(color) = brush;
         let color = format_color(&color);
-        // let affine = self.cur_transform.as_coeffs();
-        // let translate = [affine[4] as f32, affine[5] as f32];
-        let primitive_id = self.primitives.len() as u32 - 1;
+        let depth = self.depth as f32;
+        let clip = self.current_clip();
 
+        let triangles = if color[3] < 1.0 {
+            &mut self.layer.transparent_triangles
+        } else {
+            &mut self.layer.triangles
+        };
+        let mut stroke_builder = BuffersBuilder::new(triangles, |vertex: StrokeVertex| {
+            let mut pos = vertex.position_on_path().to_array();
+            let normal = vertex.normal().to_array();
+            pos[0] += normal[0] * width as f32 / 2.0 + affine[4] as f32;
+            pos[1] += normal[1] * width as f32 / 2.0 + affine[5] as f32;
+            Vertex {
+                pos,
+                color,
+                depth,
+                clip,
+            }
+        });
         if let Some(rect) = shape.as_rect() {
-            self.stroke_tess.tessellate_rectangle(
+            let _ = self.stroke_tess.tessellate_rectangle(
                 &lyon::geom::Rect::new(
                     lyon::geom::Point::new(rect.x0 as f32, rect.y0 as f32),
                     lyon::geom::Size::new(rect.width() as f32, rect.height() as f32),
@@ -180,18 +367,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                     .with_line_width(width as f32)
                     .with_line_cap(tessellation::LineCap::Round)
                     .with_line_join(tessellation::LineJoin::Round),
-                &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| {
-                    let mut pos = vertex.position_on_path().to_array();
-                    let normal = vertex.normal().to_array();
-                    pos[0] += normal[0] * width as f32 / 2.0;
-                    pos[1] += normal[1] * width as f32 / 2.0;
-                    GpuVertex {
-                        pos,
-                        color,
-                        primitive_id,
-                        ..Default::default()
-                    }
-                }),
+                &mut stroke_builder,
             );
         } else if let Some(line) = shape.as_line() {
             let mut builder = lyon::path::Path::builder();
@@ -199,24 +375,13 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             builder.line_to(lyon::geom::point(line.p1.x as f32, line.p1.y as f32));
             builder.close();
             let path = builder.build();
-            self.stroke_tess.tessellate_path(
+            let _ = self.stroke_tess.tessellate_path(
                 &path,
                 &StrokeOptions::tolerance(0.02)
                     .with_line_width(width as f32)
                     .with_line_cap(tessellation::LineCap::Round)
                     .with_line_join(tessellation::LineJoin::Round),
-                &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| {
-                    let mut pos = vertex.position_on_path().to_array();
-                    let normal = vertex.normal().to_array();
-                    pos[0] += normal[0] * width as f32 / 2.0;
-                    pos[1] += normal[1] * width as f32 / 2.0;
-                    GpuVertex {
-                        pos,
-                        color,
-                        primitive_id,
-                        ..Default::default()
-                    }
-                }),
+                &mut stroke_builder,
             );
         } else {
             let mut builder = lyon::path::Path::builder();
@@ -253,24 +418,13 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 builder.end(false);
             }
             let path = builder.build();
-            self.stroke_tess.tessellate_path(
+            let _ = self.stroke_tess.tessellate_path(
                 &path,
                 &StrokeOptions::tolerance(0.02)
                     .with_line_width(width as f32)
                     .with_line_cap(tessellation::LineCap::Round)
                     .with_line_join(tessellation::LineJoin::Round),
-                &mut BuffersBuilder::new(&mut self.geometry, |vertex: StrokeVertex| {
-                    let mut pos = vertex.position_on_path().to_array();
-                    let normal = vertex.normal().to_array();
-                    pos[0] += normal[0] * width as f32 / 2.0;
-                    pos[1] += normal[1] * width as f32 / 2.0;
-                    GpuVertex {
-                        pos,
-                        color,
-                        primitive_id,
-                        ..Default::default()
-                    }
-                }),
+                &mut stroke_builder,
             );
         }
     }
@@ -285,23 +439,27 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn fill(&mut self, shape: impl piet::kurbo::Shape, brush: &impl piet::IntoBrush<Self>) {
+        let affine = self.cur_transform.as_coeffs();
+        let clip = self.current_clip();
+
+        self.depth += 1;
+        let depth = self.depth as f32;
         if let Some(rect) = shape.as_rect() {
             let brush = brush.make_brush(self, || shape.bounding_box()).into_owned();
             let Brush::Solid(color) = brush;
             let color = format_color(&color);
-            let primitive_id = self.primitives.len() as u32 - 1;
-            self.fill_tess.tessellate_rectangle(
-                &lyon::geom::Rect::new(
-                    lyon::geom::Point::new(rect.x0 as f32, rect.y0 as f32),
-                    lyon::geom::Size::new(rect.width() as f32, rect.height() as f32),
-                ),
-                &FillOptions::tolerance(0.02).with_fill_rule(tessellation::FillRule::NonZero),
-                &mut BuffersBuilder::new(&mut self.geometry, |vertex: FillVertex| GpuVertex {
-                    pos: vertex.position().to_array(),
-                    color,
-                    primitive_id,
-                    ..Default::default()
-                }),
+            let rect = rect + Vec2::new(affine[4], affine[5]);
+
+            self.layer.add_quad(
+                [
+                    rect.x0 as f32,
+                    rect.y0 as f32,
+                    rect.x1 as f32,
+                    rect.y1 as f32,
+                ],
+                color,
+                depth,
+                clip,
             );
         }
     }
@@ -317,7 +475,12 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         if let Some(rect) = shape.as_rect() {
             let affine = self.cur_transform.as_coeffs();
             let rect = rect + Vec2::new(affine[4], affine[5]);
-            self.clip_stack.push(rect);
+            self.clip_stack.push([
+                rect.x0 as f32,
+                rect.y0 as f32,
+                rect.x1 as f32,
+                rect.y1 as f32,
+            ]);
             if let Some(state) = self.state_stack.last_mut() {
                 state.n_clip += 1;
             }
@@ -358,44 +521,17 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn finish(&mut self) -> Result<(), piet::Error> {
-        self.renderer.ensure_encoder();
-        let mut encoder = self.renderer.take_encoder();
+        let gl = &self.renderer.gl;
+        unsafe {
+            gl.clear_color(1.0, 1.0, 1.0, 1.0);
+            gl.clear_depth_f32(1.0);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(true);
+        }
 
-        self.renderer.pipeline.upload_data(
-            &self.renderer.device,
-            &mut self.renderer.staging_belt.borrow_mut(),
-            &mut encoder,
-            &self.geometry,
-            &self.primitives,
-        );
-
-        let texture = self
-            .renderer
-            .surface
-            .get_current_texture()
-            .map_err(|e| piet::Error::NotSupported)?;
-        let view = texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        self.renderer.pipeline.draw(
-            &self.renderer.device,
-            &mut encoder,
-            &view,
-            &self.renderer.msaa,
-            &self.geometry,
-        );
-
-        self.renderer.staging_belt.borrow_mut().finish();
-        self.renderer.queue.submit(Some(encoder.finish()));
-        texture.present();
-
-        self.renderer
-            .local_pool
-            .spawner()
-            .spawn(self.renderer.staging_belt.borrow_mut().recall())
-            .expect("Recall staging belt");
-        self.renderer.local_pool.run_until_stalled();
+        self.layer.draw(self.renderer, self.depth);
 
         Ok(())
     }
@@ -450,37 +586,35 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         blur_radius: f64,
         brush: &impl piet::IntoBrush<Self>,
     ) {
+        self.depth += 1;
+        let depth = self.depth as f32;
+
+        let affine = self.cur_transform.as_coeffs();
+        let clip_rect = self.current_clip();
+        let rect = rect + Vec2::new(affine[4], affine[5]);
         let rect = rect.inflate(3.0 * blur_radius, 3.0 * blur_radius);
         let blur_rect = rect.inflate(-3.0 * blur_radius, -3.0 * blur_radius);
         let brush = brush.make_brush(self, || rect).into_owned();
         let Brush::Solid(color) = brush;
         let color = format_color(&color);
-
-        self.add_primitive();
-        let primitive = self.primitives.last_mut().unwrap();
-        primitive.blur_radius = blur_radius as f32;
-        primitive.blur_rect = [
-            blur_rect.x0 as f32,
-            blur_rect.y0 as f32,
-            blur_rect.x1 as f32,
-            blur_rect.y1 as f32,
-        ];
-
-        let primitive_id = self.primitives.len() as u32 - 1;
-        self.fill_tess.tessellate_rectangle(
-            &lyon::geom::Rect::new(
-                lyon::geom::Point::new(rect.x0 as f32, rect.y0 as f32),
-                lyon::geom::Size::new(rect.width() as f32, rect.height() as f32),
-            ),
-            &FillOptions::tolerance(0.02).with_fill_rule(tessellation::FillRule::NonZero),
-            &mut BuffersBuilder::new(&mut self.geometry, |vertex: FillVertex| GpuVertex {
-                pos: vertex.position().to_array(),
-                color,
-                primitive_id,
-                ..Default::default()
-            }),
+        self.layer.add_blurred_quad(
+            [
+                rect.x0 as f32,
+                rect.y0 as f32,
+                rect.x1 as f32,
+                rect.y1 as f32,
+            ],
+            [
+                blur_rect.x0 as f32,
+                blur_rect.y0 as f32,
+                blur_rect.x1 as f32,
+                blur_rect.y1 as f32,
+            ],
+            blur_radius as f32,
+            color,
+            depth,
+            clip_rect,
         );
-        self.add_primitive();
     }
 
     fn current_transform(&self) -> piet::kurbo::Affine {
@@ -524,9 +658,13 @@ pub fn from_linear(x: f32) -> f32 {
 pub fn format_color(color: &Color) -> [f32; 4] {
     let color = color.as_rgba();
     [
-        from_linear(color.0 as f32),
-        from_linear(color.1 as f32),
-        from_linear(color.2 as f32),
+        color.0 as f32,
+        color.1 as f32,
+        color.2 as f32,
         color.3 as f32,
     ]
+}
+
+fn create_view_proj(width: f32, height: f32) -> [f32; 16] {
+    Transformation::orthographic(width, height).into()
 }
