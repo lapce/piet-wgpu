@@ -40,7 +40,7 @@ pub(crate) struct Layer {
     pub blurred_quads: Vec<BlurQuad>,
     pub triangles: VertexBuffers<Vertex, u32>,
     pub transparent_triangles: VertexBuffers<Vertex, u32>,
-    pub texts: Vec<Text>,
+    pub texts: Vec<Tex>,
 }
 
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
@@ -65,7 +65,7 @@ pub struct BlurQuad {
 
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
-pub struct Text {
+pub struct Tex {
     pub rect: [f32; 4],
     pub tex_rect: [f32; 4],
     pub color: [f32; 4],
@@ -139,7 +139,7 @@ impl Layer {
         self.blurred_quads.push(quad);
     }
 
-    pub fn add_text(&mut self, mut text: Vec<Text>) {
+    pub fn add_text(&mut self, mut text: Vec<Tex>) {
         self.texts.append(&mut text);
     }
 

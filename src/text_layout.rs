@@ -62,7 +62,7 @@ pub struct WgpuTextLayout {
     attrs: Rc<Attributes>,
     ref_glyph: Rc<RefCell<GlyphPosInfo>>,
     glyphs: Rc<RefCell<Vec<GlyphPosInfo>>>,
-    instances: Rc<RefCell<Vec<context::Text>>>,
+    instances: Rc<RefCell<Vec<context::Tex>>>,
 }
 
 impl WgpuTextLayout {
@@ -193,7 +193,7 @@ impl WgpuTextLayout {
             let rect = &glyph_pos.rect;
             let cache_rect = &glyph_pos.cache_rect;
 
-            instances.push(context::Text {
+            instances.push(context::Tex {
                 rect: [
                     rect.x0 as f32,
                     rect.y0 as f32,
@@ -231,7 +231,7 @@ impl WgpuTextLayout {
 
         let instances = instances
             .iter()
-            .map(|i| context::Text {
+            .map(|i| context::Tex {
                 rect: [
                     i.rect[0] + translate[0],
                     i.rect[1] + translate[1],

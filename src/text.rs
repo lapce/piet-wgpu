@@ -15,7 +15,7 @@ use swash::{
     CacheKey, FontRef,
 };
 
-use crate::{context::Text, pipeline::create_program};
+use crate::{context::Tex, pipeline::create_program};
 
 const MAX_INSTANCES: usize = 100_000;
 const FONTS_DIR: Dir = include_dir!("./fonts");
@@ -44,8 +44,8 @@ impl Pipeline {
             create_program(
                 gl,
                 &[
-                    (glow::VERTEX_SHADER, include_str!("./shader/text.vert")),
-                    (glow::FRAGMENT_SHADER, include_str!("./shader/text.frag")),
+                    (glow::VERTEX_SHADER, include_str!("./shader/tex.vert")),
+                    (glow::FRAGMENT_SHADER, include_str!("./shader/tex.frag")),
                 ],
             )
         };
@@ -82,7 +82,7 @@ impl Pipeline {
     pub fn draw(
         &mut self,
         gl: &glow::Context,
-        instances: &[Text],
+        instances: &[Tex],
         scale: f32,
         view_proj: &[f32],
         max_depth: u32,
@@ -135,11 +135,11 @@ unsafe fn create_instance_buffer(
     gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
     gl.buffer_data_size(
         glow::ARRAY_BUFFER,
-        (size * std::mem::size_of::<Text>()) as i32,
+        (size * std::mem::size_of::<Tex>()) as i32,
         glow::DYNAMIC_DRAW,
     );
 
-    let stride = std::mem::size_of::<Text>() as i32;
+    let stride = std::mem::size_of::<Tex>() as i32;
 
     gl.enable_vertex_attrib_array(0);
     gl.vertex_attrib_pointer_f32(0, 4, glow::FLOAT, false, stride, 0);
