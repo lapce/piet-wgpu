@@ -14,29 +14,20 @@ use piet::{
 };
 use unicode_width::UnicodeWidthChar;
 
-use crate::context::{self, format_color, from_linear, WgpuRenderContext};
-use crate::pipeline::GpuVertex;
+use crate::context::{self, format_color, WgpuRenderContext};
 use crate::text::{Cache, GlyphPosInfo};
 
 #[derive(Clone)]
 pub struct WgpuText {
-    source: Rc<RefCell<SystemSource>>,
-    glyphs: Rc<RefCell<HashMap<FontFamily, HashMap<char, Rc<(Vec<[f32; 2]>, Vec<u32>)>>>>>,
-    pub(crate) cache: Rc<RefCell<Cache>>,
     gl: Rc<glow::Context>,
-    fill_tess: Rc<RefCell<FillTessellator>>,
-    stroke_tess: Rc<RefCell<StrokeTessellator>>,
+    pub(crate) cache: Rc<RefCell<Cache>>,
 }
 
 impl WgpuText {
     pub(crate) fn new(gl: Rc<glow::Context>) -> Self {
         Self {
-            source: Rc::new(RefCell::new(SystemSource::new())),
-            glyphs: Rc::new(RefCell::new(HashMap::new())),
             cache: Rc::new(RefCell::new(Cache::new(&gl, 2000, 2000))),
             gl,
-            fill_tess: Rc::new(RefCell::new(FillTessellator::new())),
-            stroke_tess: Rc::new(RefCell::new(StrokeTessellator::new())),
         }
     }
 
@@ -46,10 +37,11 @@ impl WgpuText {
         font_family: FontFamily,
         font_size: f32,
         font_weight: FontWeight,
+        x: f32,
     ) -> Result<GlyphPosInfo, piet::Error> {
         let mut cache = self.cache.borrow_mut();
         cache
-            .get_glyph_pos(c, font_family, font_size, font_weight, &self.gl)
+            .get_glyph_pos(c, font_family, font_size, font_weight, x, &self.gl)
             .map(|p| p.clone())
     }
 }
@@ -99,9 +91,9 @@ impl WgpuTextLayout {
         let font_weight = self.attrs.defaults.weight;
         if let Ok(glyph_pos) =
             self.state
-                .get_glyph_pos('W', font_family.clone(), font_size as f32, font_weight)
+                .get_glyph_pos('W', font_family, font_size as f32, font_weight, 0.0)
         {
-            *self.ref_glyph.borrow_mut() = glyph_pos.clone();
+            *self.ref_glyph.borrow_mut() = glyph_pos;
         }
 
         let mono_width = self.ref_glyph.borrow().rect.width();
@@ -115,6 +107,7 @@ impl WgpuTextLayout {
         instances.clear();
         instances.reserve(len);
 
+        let scale = self.state.cache.borrow().scale as f32;
         let mut x = 0.0;
         let mut y = 0.0;
         let mut max_height = 0.0;
@@ -134,23 +127,19 @@ impl WgpuTextLayout {
                     UnicodeWidthChar::width(c).unwrap_or(1)
                 };
                 mono_char_widths += char_width;
-                let width = char_width as f32 * mono_width as f32;
-                width
+                char_width as f32 * mono_width as f32
             } else {
                 let char_width = if c == '\t' {
                     tab_width
                 } else {
                     UnicodeWidthChar::width(c).unwrap_or(1)
                 };
-                let width = char_width as f32 * mono_width as f32;
-                width
+                char_width as f32 * mono_width as f32
             };
 
-            let color = format_color(&color);
             let mut glyph_pos = self
                 .state
-                .get_glyph_pos(c, font_family, font_size, font_weight)
-                .map(|g| g.clone())
+                .get_glyph_pos(c, font_family, font_size, font_weight, x)
                 .unwrap_or_else(|_| GlyphPosInfo::empty(default_width as f64));
             let width = if is_mono {
                 glyph_pos.width = default_width as f64;
@@ -158,13 +147,13 @@ impl WgpuTextLayout {
             } else {
                 glyph_pos.rect.width() as f32
             };
-
             if (x + width) as f64 > self.width {
                 x = 0.0;
                 y += max_height;
             }
 
-            glyph_pos.rect = glyph_pos.rect.with_origin((x as f64, y as f64));
+            let corrected_x = (((x * scale + 0.125).floor()) / scale) as f64;
+            glyph_pos.rect = glyph_pos.rect.with_origin((corrected_x, y as f64));
 
             let new_x = x + width;
 
@@ -193,6 +182,7 @@ impl WgpuTextLayout {
             let rect = &glyph_pos.rect;
             let cache_rect = &glyph_pos.cache_rect;
 
+            let color = format_color(color);
             instances.push(context::Tex {
                 rect: [
                     rect.x0 as f32,
@@ -225,7 +215,7 @@ impl WgpuTextLayout {
         let affine = ctx.cur_transform.as_coeffs();
         let clip = ctx.current_clip();
         let translate = [
-            translate[0] + affine[4] as f32,
+            (translate[0] + affine[4] as f32).round(),
             (translate[1] + affine[5] as f32).round(),
         ];
 

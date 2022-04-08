@@ -163,9 +163,14 @@ impl Layer {
                 .gl
                 .blend_func(glow::SRC1_COLOR, glow::ONE_MINUS_SRC1_COLOR);
         }
-        renderer
-            .text_pipeline
-            .draw(&renderer.gl, &self.texts, scale, &view_proj, max_depth);
+        renderer.tex_pipeline.draw(
+            &renderer.gl,
+            &self.texts,
+            scale,
+            &view_proj,
+            max_depth,
+            renderer.text.cache.borrow().gl_texture,
+        );
 
         unsafe {
             renderer.gl.enable(glow::BLEND);

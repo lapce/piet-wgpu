@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use font_kit::{family_name::FamilyName, font::Font, source::SystemSource};
 use glow::HasContext;
@@ -15,9 +15,6 @@ use swash::{
     CacheKey, FontRef,
 };
 
-use crate::{context::Tex, pipeline::create_program};
-
-const MAX_INSTANCES: usize = 100_000;
 const FONTS_DIR: Dir = include_dir!("./fonts");
 const DEFAULT_FONT: &[u8] = include_bytes!("../fonts/CascadiaCode-Regular.otf");
 const IS_MACOS: bool = cfg!(target_os = "macos");
@@ -26,146 +23,6 @@ const SOURCES: &[Source] = &[
     Source::ColorOutline(0),
     Source::Outline,
 ];
-
-pub struct Pipeline {
-    program: <glow::Context as HasContext>::Program,
-    vertex_array: <glow::Context as HasContext>::VertexArray,
-    instances: <glow::Context as HasContext>::Buffer,
-    scale_location: <glow::Context as HasContext>::UniformLocation,
-    view_proj: <glow::Context as HasContext>::UniformLocation,
-    depth_location: <glow::Context as HasContext>::UniformLocation,
-    cache: Rc<RefCell<Cache>>,
-    current_scale: f32,
-}
-
-impl Pipeline {
-    pub fn new(gl: &glow::Context, cache: Rc<RefCell<Cache>>) -> Self {
-        let program = unsafe {
-            create_program(
-                gl,
-                &[
-                    (glow::VERTEX_SHADER, include_str!("./shader/tex.vert")),
-                    (glow::FRAGMENT_SHADER, include_str!("./shader/tex.frag")),
-                ],
-            )
-        };
-
-        let scale_location =
-            unsafe { gl.get_uniform_location(program, "u_scale") }.expect("Get scale location");
-        let depth_location =
-            unsafe { gl.get_uniform_location(program, "u_depth") }.expect("Get depth location");
-        let view_proj = unsafe { gl.get_uniform_location(program, "view_proj") }
-            .expect("Get view_proj location");
-
-        unsafe {
-            gl.use_program(Some(program));
-
-            gl.uniform_1_f32(Some(&scale_location), 1.0);
-
-            gl.use_program(None);
-        }
-
-        let (vertex_array, instances) = unsafe { create_instance_buffer(gl, MAX_INSTANCES) };
-
-        Self {
-            vertex_array,
-            instances,
-            program,
-            cache,
-            scale_location,
-            depth_location,
-            view_proj,
-            current_scale: 1.0,
-        }
-    }
-
-    pub fn draw(
-        &mut self,
-        gl: &glow::Context,
-        instances: &[Tex],
-        scale: f32,
-        view_proj: &[f32],
-        max_depth: u32,
-    ) {
-        if instances.is_empty() {
-            return;
-        }
-
-        unsafe {
-            gl.use_program(Some(self.program));
-            gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.cache.borrow().gl_texture));
-            gl.bind_vertex_array(Some(self.vertex_array));
-            gl.uniform_matrix_4_f32_slice(Some(&self.view_proj), false, view_proj);
-            gl.uniform_1_f32(Some(&self.depth_location), max_depth as f32);
-        }
-
-        if scale != self.current_scale {
-            unsafe {
-                gl.uniform_1_f32(Some(&self.scale_location), scale);
-            }
-
-            self.current_scale = scale;
-        }
-
-        unsafe {
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instances));
-            gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, bytemuck::cast_slice(instances));
-            gl.bind_buffer(glow::ARRAY_BUFFER, None);
-
-            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, instances.len() as i32);
-            gl.bind_vertex_array(None);
-            gl.bind_texture(glow::TEXTURE_2D, None);
-            gl.use_program(None);
-        }
-    }
-}
-
-unsafe fn create_instance_buffer(
-    gl: &glow::Context,
-    size: usize,
-) -> (
-    <glow::Context as HasContext>::VertexArray,
-    <glow::Context as HasContext>::Buffer,
-) {
-    let vertex_array = gl.create_vertex_array().expect("Create vertex array");
-    let buffer = gl.create_buffer().expect("Create instance buffer");
-
-    gl.bind_vertex_array(Some(vertex_array));
-    gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
-    gl.buffer_data_size(
-        glow::ARRAY_BUFFER,
-        (size * std::mem::size_of::<Tex>()) as i32,
-        glow::DYNAMIC_DRAW,
-    );
-
-    let stride = std::mem::size_of::<Tex>() as i32;
-
-    gl.enable_vertex_attrib_array(0);
-    gl.vertex_attrib_pointer_f32(0, 4, glow::FLOAT, false, stride, 0);
-    gl.vertex_attrib_divisor(0, 1);
-
-    gl.enable_vertex_attrib_array(1);
-    gl.vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, stride, 4 * 4);
-    gl.vertex_attrib_divisor(1, 1);
-
-    gl.enable_vertex_attrib_array(2);
-    gl.vertex_attrib_pointer_f32(2, 4, glow::FLOAT, false, stride, 4 * (4 + 4));
-    gl.vertex_attrib_divisor(2, 1);
-
-    gl.enable_vertex_attrib_array(3);
-    gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 4 * (4 + 4 + 4));
-    gl.vertex_attrib_divisor(3, 1);
-
-    gl.enable_vertex_attrib_array(4);
-    gl.vertex_attrib_pointer_f32(4, 4, glow::FLOAT, false, stride, 4 * (4 + 4 + 4 + 1));
-    gl.vertex_attrib_divisor(4, 1);
-
-    gl.bind_vertex_array(None);
-    gl.bind_buffer(glow::ARRAY_BUFFER, None);
-
-    (vertex_array, buffer)
-}
 
 struct Row {
     y: u32,
@@ -308,6 +165,7 @@ impl Cache {
         font_family: FontFamily,
         font_weight: FontWeight,
         font_size: u32,
+        subpx: [SubpixelOffset; 2],
     ) -> Result<GlyphInfo, piet::Error> {
         let key = (c, font_family.clone(), font_weight);
         if !self.glyph_infos.contains_key(&key) {
@@ -330,6 +188,7 @@ impl Cache {
             font_id: *font_id,
             font_size,
             glyph_id: *glyph_id,
+            subpx,
         })
     }
 
@@ -339,12 +198,17 @@ impl Cache {
         font_family: FontFamily,
         font_size: f32,
         font_weight: FontWeight,
+        x: f32,
         gl: &glow::Context,
     ) -> Result<&GlyphPosInfo, piet::Error> {
         let scale = self.scale;
 
         let font_size = (font_size as f64 * scale).round() as u32;
-        let glyph = self.get_glyph_info(c, font_family.clone(), font_weight, font_size)?;
+        let subpx = [
+            SubpixelOffset::quantize(x * scale as f32),
+            SubpixelOffset::quantize(0.0),
+        ];
+        let glyph = self.get_glyph_info(c, font_family, font_weight, font_size, subpx)?;
 
         if let Some((row, index)) = self.glyphs.get(&glyph) {
             let row = self.rows.get(row).unwrap();
@@ -371,10 +235,6 @@ impl Cache {
         let glyph_width = glyph_real_width.ceil() as u32 + padding as u32;
         let glyph_height = glyph_real_height.ceil() as u32 + padding as u32;
 
-        let x = 0.0;
-        let y = 0.0;
-        let subpx = [SubpixelOffset::quantize(x), SubpixelOffset::quantize(y)];
-
         let piet_font = &self.piet_fonts[glyph.font_id];
 
         let mut scaler = self
@@ -396,36 +256,34 @@ impl Cache {
         let mut offset = [0, 0];
         let mut inserted = false;
         for (row_number, row) in self.rows.iter_mut().rev() {
-            if row.height == glyph_height {
-                if self.width - row.width > glyph_width {
-                    let origin = Point::new(
-                        row.width as f64 + padding as f64 / 2.0,
-                        row.y as f64 + padding as f64 / 2.0,
-                    );
-                    let glyph_pos = glyph_rect_to_pos(
-                        glyph_rect,
-                        origin,
-                        &glyph,
-                        &glyph_metric,
-                        scale,
-                        [self.width, self.height],
-                    );
+            if row.height == glyph_height && self.width - row.width > glyph_width {
+                let origin = Point::new(
+                    row.width as f64 + padding as f64 / 2.0,
+                    row.y as f64 + padding as f64 / 2.0,
+                );
+                let glyph_pos = glyph_rect_to_pos(
+                    glyph_rect,
+                    origin,
+                    &glyph,
+                    &glyph_metric,
+                    scale,
+                    [self.width, self.height],
+                );
 
-                    row.glyphs.push(glyph_pos);
-                    offset[0] = row.width;
-                    offset[1] = row.y;
-                    row.width += glyph_width;
-                    self.glyphs
-                        .insert(glyph.clone(), (*row_number, row.glyphs.len() - 1));
-                    inserted = true;
-                    break;
-                }
+                row.glyphs.push(glyph_pos);
+                offset[0] = row.width;
+                offset[1] = row.y;
+                row.width += glyph_width;
+                self.glyphs
+                    .insert(glyph.clone(), (*row_number, row.glyphs.len() - 1));
+                inserted = true;
+                break;
             }
         }
 
         if !inserted {
             let mut y = 0;
-            if self.rows.len() > 0 {
+            if !self.rows.is_empty() {
                 let last_row = self.rows.get(&(self.rows.len() - 1)).unwrap();
                 y = last_row.y + last_row.height;
             }
@@ -500,7 +358,7 @@ impl Cache {
             .font_source
             .select_best_match(
                 &[family_name],
-                &font_kit::properties::Properties::new()
+                font_kit::properties::Properties::new()
                     .weight(font_kit::properties::Weight(weight.to_raw() as f32)),
             )
             .ok()
@@ -542,6 +400,7 @@ pub(crate) struct GlyphInfo {
     font_id: usize,
     glyph_id: u32,
     font_size: u32,
+    pub(crate) subpx: [SubpixelOffset; 2],
 }
 
 #[derive(Default, Clone)]
@@ -568,6 +427,7 @@ impl GlyphPosInfo {
                 font_id: 0,
                 glyph_id: 0,
                 font_size: 0,
+                subpx: [SubpixelOffset::Zero, SubpixelOffset::Zero],
             },
             metric: GlyphMetricInfo {
                 ascent: 0.0,
@@ -575,7 +435,7 @@ impl GlyphPosInfo {
                 line_gap: 0.0,
                 mono: false,
             },
-            width: width,
+            width,
             rect: Size::new(width, 0.0).to_rect(),
             cache_rect: Rect::ZERO,
         }
@@ -591,12 +451,13 @@ fn glyph_rect_to_pos(
     size: [u32; 2],
 ) -> GlyphPosInfo {
     let glyph_rect = glyph_rect.with_origin(origin);
-    let mut cache_rect = glyph_rect.clone();
+    let mut cache_rect = glyph_rect;
     cache_rect.x0 /= size[0] as f64;
     cache_rect.x1 /= size[0] as f64;
     cache_rect.y0 /= size[1] as f64;
     cache_rect.y1 /= size[1] as f64;
-    let glyph_pos = GlyphPosInfo {
+
+    GlyphPosInfo {
         info: glyph.clone(),
         rect: glyph_rect.with_size(Size::new(
             glyph_rect.size().width / scale,
@@ -605,8 +466,7 @@ fn glyph_rect_to_pos(
         width: glyph_rect.size().width / scale,
         metric: glyph_metric.clone(),
         cache_rect,
-    };
-    glyph_pos
+    }
 }
 
 #[derive(Hash, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -616,6 +476,12 @@ pub enum SubpixelOffset {
     Quarter = 1,
     Half = 2,
     ThreeQuarters = 3,
+}
+
+impl Default for SubpixelOffset {
+    fn default() -> Self {
+        SubpixelOffset::Zero
+    }
 }
 
 impl SubpixelOffset {
@@ -639,7 +505,7 @@ impl SubpixelOffset {
         }
     }
 
-    fn to_f32(self) -> f32 {
+    pub(crate) fn to_f32(self) -> f32 {
         match self {
             SubpixelOffset::Zero => 0.0,
             SubpixelOffset::Quarter => 0.25,

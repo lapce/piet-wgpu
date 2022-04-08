@@ -5,6 +5,7 @@ mod layer;
 mod pipeline;
 mod quad;
 mod svg;
+mod tex;
 mod text;
 mod text_layout;
 mod transformation;
@@ -46,7 +47,7 @@ pub struct WgpuRenderer {
     quad_pipeline: quad::Pipeline,
     blur_quad_pipeline: blur_quad::Pipeline,
     triangle_pipeline: triangle::Pipeline,
-    text_pipeline: text::Pipeline,
+    tex_pipeline: tex::Pipeline,
 }
 
 impl WgpuRenderer {
@@ -62,7 +63,7 @@ impl WgpuRenderer {
         let quad_pipeline = quad::Pipeline::new(&gl);
         let blur_quad_pipeline = blur_quad::Pipeline::new(&gl);
         let triangle_pipeline = triangle::Pipeline::new(&gl);
-        let text_pipeline = text::Pipeline::new(&gl, text.cache.clone());
+        let tex_pipeline = tex::Pipeline::new(&gl);
 
         Ok(Self {
             gl,
@@ -72,7 +73,7 @@ impl WgpuRenderer {
             quad_pipeline,
             blur_quad_pipeline,
             triangle_pipeline,
-            text_pipeline,
+            tex_pipeline,
             scale: 1.0,
         })
     }
