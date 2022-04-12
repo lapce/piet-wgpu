@@ -1,5 +1,4 @@
 use glow::HasContext;
-use piet::kurbo::Size;
 
 use crate::{context::BlurQuad, pipeline::create_program};
 

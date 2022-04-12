@@ -10,13 +10,12 @@ use crate::{
 use bytemuck::{Pod, Zeroable};
 use glow::HasContext;
 use lyon::lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
-    StrokeVertex, VertexBuffers,
+    BuffersBuilder, FillTessellator, StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 use lyon::tessellation;
 use piet::{
-    kurbo::{Affine, Point, Rect, Shape, Size, Vec2},
-    Color, FontFamily, Image, IntoBrush, RenderContext,
+    kurbo::{Affine, Point, Rect, Shape, Vec2},
+    Color, Image, IntoBrush, RenderContext,
 };
 
 pub struct WgpuRenderContext<'a> {

@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 
 use glow::HasContext;
 use lyon::lyon_tessellation::VertexBuffers;
-use piet::kurbo::Size;
 
 use crate::{context::Vertex, pipeline::create_program};
 

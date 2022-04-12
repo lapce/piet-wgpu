@@ -1,7 +1,5 @@
 mod blur_quad;
 mod context;
-mod font;
-mod layer;
 mod pipeline;
 mod quad;
 mod svg;
@@ -12,14 +10,13 @@ mod transformation;
 mod triangle;
 
 use glow::HasContext;
-use log::info;
 pub use piet::kurbo;
 use piet::kurbo::Size;
 pub use piet::*;
 pub use svg::Svg;
 use svg::SvgStore;
 
-use std::{cell::RefCell, marker::PhantomData, rc::Rc};
+use std::{marker::PhantomData, rc::Rc};
 
 use context::{WgpuImage, WgpuRenderContext};
 use text_layout::{WgpuText, WgpuTextLayout, WgpuTextLayoutBuilder};

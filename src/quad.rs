@@ -13,8 +13,6 @@ pub struct Pipeline {
     view_proj: <glow::Context as HasContext>::UniformLocation,
     depth_location: <glow::Context as HasContext>::UniformLocation,
     current_scale: f32,
-    pub(crate) size: Size,
-    pub(crate) scale: f64,
 }
 
 impl Pipeline {
@@ -54,8 +52,6 @@ impl Pipeline {
             depth_location,
             view_proj,
             current_scale: 1.0,
-            size: Size::ZERO,
-            scale: 1.0,
         }
     }
 
