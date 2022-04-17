@@ -63,15 +63,15 @@ impl WgpuRenderer {
         let tex_pipeline = tex::Pipeline::new(&gl);
 
         Ok(Self {
-            gl,
             text,
             size: Size::ZERO,
-            svg_store: SvgStore::new(),
+            svg_store: SvgStore::new(&gl),
             quad_pipeline,
             blur_quad_pipeline,
             triangle_pipeline,
             tex_pipeline,
             scale: 1.0,
+            gl,
         })
     }
 

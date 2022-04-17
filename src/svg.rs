@@ -1,18 +1,9 @@
-use std::{collections::HashMap, f64::NAN, str::FromStr};
+use std::{collections::HashMap, str::FromStr};
 
-use lyon::{
-    lyon_tessellation::{
-        BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
-        StrokeVertex, VertexBuffers,
-    },
-    math::{point, Point},
-    path::PathEvent,
-    tessellation,
-};
+use glow::HasContext;
+use linked_hash_map::LinkedHashMap;
+use piet::kurbo::{Point, Rect, Size};
 use sha2::{Digest, Sha256};
-use usvg::NodeExt;
-
-use crate::{context::from_linear, pipeline::GpuVertex};
 
 #[derive(Clone)]
 pub struct Svg {
@@ -20,127 +11,236 @@ pub struct Svg {
     pub(crate) tree: usvg::Tree,
 }
 
-unsafe impl Sync for Svg {}
 unsafe impl Send for Svg {}
+unsafe impl Sync for Svg {}
 
 impl FromStr for Svg {
     type Err = Box<dyn std::error::Error>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut re_opt = usvg::Options {
-            keep_named_groups: false,
-            ..usvg::Options::default()
-        };
-
         let mut hasher = Sha256::new();
         hasher.update(s);
         let hash = hasher.finalize().to_vec();
 
-        re_opt.fontdb.load_system_fonts();
-
-        match usvg::Tree::from_str(s, &re_opt) {
+        match usvg::Tree::from_str(s, &usvg::Options::default().to_ref()) {
             Ok(tree) => Ok(Self { hash, tree }),
             Err(err) => Err(err.into()),
         }
     }
 }
 
-pub(crate) struct SvgData {
-    pub(crate) geometry: VertexBuffers<GpuVertex, u32>,
-    pub(crate) transforms: Vec<[f32; 6]>,
+pub(crate) struct SvgStore {
+    pub(crate) cache: SvgCache,
 }
 
-pub(crate) struct SvgStore {
-    svgs: HashMap<Vec<u8>, SvgData>,
-    fill_tess: FillTessellator,
-    stroke_tess: StrokeTessellator,
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Default)]
+pub(crate) struct SvgInfo {
+    hash: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct SvgPosInfo {
+    pub(crate) rect: Rect,
+    pub(crate) cache_rect: Rect,
+}
+
+struct SvgRow {
+    y: u32,
+    height: u32,
+    width: u32,
+    svgs: Vec<SvgPosInfo>,
+}
+
+pub struct SvgCache {
+    pub gl_texture: glow::Texture,
+    width: u32,
+    height: u32,
+
+    rows: LinkedHashMap<usize, SvgRow>,
+    svgs: HashMap<SvgInfo, (usize, usize)>,
+    pub(crate) scale: f64,
+}
+
+impl SvgCache {
+    pub fn new(gl: &glow::Context) -> Self {
+        let width = 2000;
+        let height = 2000;
+        let gl_texture = unsafe {
+            let handle = gl.create_texture().expect("Create glyph cache texture");
+
+            gl.bind_texture(glow::TEXTURE_2D, Some(handle));
+
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                None,
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+
+            handle
+        };
+
+        Self {
+            gl_texture,
+            width,
+            height,
+            rows: LinkedHashMap::new(),
+            svgs: HashMap::new(),
+            scale: 1.0,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        gl: &glow::Context,
+        offset: [u32; 2],
+        data: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.gl_texture));
+
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                offset[0] as i32,
+                offset[1] as i32,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(data),
+            );
+
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+    }
+
+    pub(crate) fn get_svg(
+        &mut self,
+        gl: &glow::Context,
+        svg: &Svg,
+        [width, height]: [f32; 2],
+    ) -> Result<&SvgPosInfo, piet::Error> {
+        let (width, height) = (width.ceil() as u32, height.ceil() as u32);
+        let svg_info = SvgInfo {
+            hash: svg.hash.clone(),
+            width,
+            height,
+        };
+
+        if let Some((row, index)) = self.svgs.get(&svg_info) {
+            let row = self.rows.get(row).unwrap();
+            return Ok(&row.svgs[*index]);
+        }
+
+        let transform = tiny_skia::Transform::identity();
+        let mut img = tiny_skia::Pixmap::new(width, height).ok_or(piet::Error::InvalidInput)?;
+
+        let _ = resvg::render(
+            &svg.tree,
+            if width > height {
+                usvg::FitTo::Width(width)
+            } else {
+                usvg::FitTo::Height(height)
+            },
+            transform,
+            img.as_mut(),
+        )
+        .ok_or(piet::Error::InvalidInput)?;
+
+        let scale = self.scale;
+        let glyph_rect = Size::new(width as f64, height as f64).to_rect();
+        let mut offset = [0, 0];
+        let mut inserted = false;
+        for (row_number, row) in self.rows.iter_mut().rev() {
+            if row.height == height && self.width - row.width > width {
+                let origin = Point::new(row.width as f64, row.y as f64);
+                let glyph_pos =
+                    svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+
+                row.svgs.push(glyph_pos);
+                offset[0] = row.width;
+                offset[1] = row.y;
+                row.width += width;
+                self.svgs
+                    .insert(svg_info.clone(), (*row_number, row.svgs.len() - 1));
+                inserted = true;
+                break;
+            }
+        }
+
+        if !inserted {
+            let mut y = 0;
+            if !self.rows.is_empty() {
+                let last_row = self.rows.get(&(self.rows.len() - 1)).unwrap();
+                y = last_row.y + last_row.height;
+            }
+            if self.height < y + height {
+                return Err(piet::Error::MissingFont);
+            }
+
+            let origin = Point::new(0.0, y as f64);
+            let svg_pos = svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+
+            offset[0] = 0;
+            offset[1] = y;
+            let new_row = self.rows.len();
+            let svgs = vec![svg_pos];
+            let row = SvgRow {
+                y,
+                height,
+                width,
+                svgs,
+            };
+
+            self.rows.insert(new_row, row);
+            self.svgs.insert(svg_info.clone(), (new_row, 0));
+        }
+
+        let data = img.take();
+        self.update(gl, offset, &data, width, height);
+
+        let (row, index) = self.svgs.get(&svg_info).unwrap();
+        let row = self.rows.get(row).unwrap();
+        Ok(&row.svgs[*index])
+    }
 }
 
 impl SvgStore {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(gl: &glow::Context) -> Self {
         Self {
-            svgs: HashMap::new(),
-            fill_tess: FillTessellator::new(),
-            stroke_tess: StrokeTessellator::new(),
-        }
-    }
-
-    pub(crate) fn get_svg_data(&mut self, svg: &Svg) -> &SvgData {
-        if !self.svgs.contains_key(&svg.hash) {
-            let data = self.new_svg_data(svg);
-            self.svgs.insert(svg.hash.clone(), data);
-        }
-        self.svgs.get(&svg.hash).unwrap()
-    }
-
-    fn new_svg_data(&mut self, svg: &Svg) -> SvgData {
-        let mut prev_transform = usvg::Transform {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            e: 0.0,
-            f: 0.0,
-        };
-        let mut geometry: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
-        let mut transforms = Vec::new();
-        transforms.push([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-        for node in svg.tree.root().descendants() {
-            if let usvg::NodeKind::Path(ref p) = *node.borrow() {
-                let t = node.transform();
-                if t != prev_transform {
-                    transforms.push([
-                        t.a as f32, t.b as f32, t.c as f32, t.d as f32, t.e as f32, t.f as f32,
-                    ]);
-                    prev_transform = t;
-                }
-                if let Some(ref fill) = p.fill {
-                    let color = match fill.paint {
-                        usvg::Paint::Color(c) => c,
-                        _ => FALLBACK_COLOR,
-                    };
-                    let color = [
-                        from_linear(color.red as f32 / 255.0),
-                        from_linear(color.green as f32 / 255.0),
-                        from_linear(color.blue as f32 / 255.0),
-                        fill.opacity.value() as f32,
-                    ];
-                    self.fill_tess.tessellate(
-                        convert_path(p),
-                        &FillOptions::tolerance(0.01),
-                        &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| GpuVertex {
-                            pos: vertex.position().to_array(),
-                            color,
-                            primitive_id: transforms.len() as u32 - 1,
-                            ..Default::default()
-                        }),
-                    );
-                }
-
-                if let Some(ref stroke) = p.stroke {
-                    let (stroke_color, stroke_opacity, stroke_opts) = convert_stroke(stroke);
-                    let color = [
-                        from_linear(stroke_color.red as f32 / 255.0),
-                        from_linear(stroke_color.green as f32 / 255.0),
-                        from_linear(stroke_color.blue as f32 / 255.0),
-                        stroke_opacity.value() as f32,
-                    ];
-                    let _ = self.stroke_tess.tessellate(
-                        convert_path(p),
-                        &stroke_opts.with_tolerance(0.01),
-                        &mut BuffersBuilder::new(&mut geometry, |vertex: StrokeVertex| GpuVertex {
-                            pos: vertex.position().to_array(),
-                            color,
-                            primitive_id: transforms.len() as u32 - 1,
-                            ..Default::default()
-                        }),
-                    );
-                }
-            }
-        }
-        SvgData {
-            geometry,
-            transforms,
+            cache: SvgCache::new(gl),
         }
     }
 }
@@ -151,126 +251,18 @@ pub const FALLBACK_COLOR: usvg::Color = usvg::Color {
     blue: 0,
 };
 
-pub struct PathConvIter<'a> {
-    iter: std::slice::Iter<'a, usvg::PathSegment>,
-    prev: Point,
-    first: Point,
-    needs_end: bool,
-    deferred: Option<PathEvent>,
-}
+fn svg_rect_to_pos(glyph_rect: Rect, origin: Point, scale: f64, size: [u32; 2]) -> SvgPosInfo {
+    let mut cache_rect = glyph_rect.with_origin(origin);
+    cache_rect.x0 /= size[0] as f64;
+    cache_rect.x1 /= size[0] as f64;
+    cache_rect.y0 /= size[1] as f64;
+    cache_rect.y1 /= size[1] as f64;
 
-impl<'l> Iterator for PathConvIter<'l> {
-    type Item = PathEvent;
-    fn next(&mut self) -> Option<PathEvent> {
-        if self.deferred.is_some() {
-            return self.deferred.take();
-        }
-
-        let next = self.iter.next();
-        match next {
-            Some(usvg::PathSegment::MoveTo { x, y }) => {
-                if self.needs_end {
-                    let last = self.prev;
-                    let first = self.first;
-                    self.needs_end = false;
-                    self.prev = point(*x as f32, *y as f32);
-                    self.deferred = Some(PathEvent::Begin { at: self.prev });
-                    self.first = self.prev;
-                    Some(PathEvent::End {
-                        last,
-                        first,
-                        close: false,
-                    })
-                } else {
-                    self.first = point(*x as f32, *y as f32);
-                    self.needs_end = true;
-                    Some(PathEvent::Begin { at: self.first })
-                }
-            }
-            Some(usvg::PathSegment::LineTo { x, y }) => {
-                self.needs_end = true;
-                let from = self.prev;
-                self.prev = point(*x as f32, *y as f32);
-                Some(PathEvent::Line {
-                    from,
-                    to: self.prev,
-                })
-            }
-            Some(usvg::PathSegment::CurveTo {
-                x1,
-                y1,
-                x2,
-                y2,
-                x,
-                y,
-            }) => {
-                self.needs_end = true;
-                let from = self.prev;
-                self.prev = point(*x as f32, *y as f32);
-                Some(PathEvent::Cubic {
-                    from,
-                    ctrl1: point(*x1 as f32, *y1 as f32),
-                    ctrl2: point(*x2 as f32, *y2 as f32),
-                    to: self.prev,
-                })
-            }
-            Some(usvg::PathSegment::ClosePath) => {
-                self.needs_end = false;
-                self.prev = self.first;
-                Some(PathEvent::End {
-                    last: self.prev,
-                    first: self.first,
-                    close: true,
-                })
-            }
-            None => {
-                if self.needs_end {
-                    self.needs_end = false;
-                    let last = self.prev;
-                    let first = self.first;
-                    Some(PathEvent::End {
-                        last,
-                        first,
-                        close: false,
-                    })
-                } else {
-                    None
-                }
-            }
-        }
+    SvgPosInfo {
+        rect: glyph_rect.with_size(Size::new(
+            glyph_rect.size().width / scale,
+            glyph_rect.size().height / scale,
+        )),
+        cache_rect,
     }
-}
-
-pub fn convert_path(p: &usvg::Path) -> PathConvIter {
-    PathConvIter {
-        iter: p.data.iter(),
-        first: Point::new(0.0, 0.0),
-        prev: Point::new(0.0, 0.0),
-        deferred: None,
-        needs_end: false,
-    }
-}
-
-pub fn convert_stroke(s: &usvg::Stroke) -> (usvg::Color, usvg::Opacity, StrokeOptions) {
-    let color = match s.paint {
-        usvg::Paint::Color(c) => c,
-        _ => FALLBACK_COLOR,
-    };
-    let linecap = match s.linecap {
-        usvg::LineCap::Butt => tessellation::LineCap::Butt,
-        usvg::LineCap::Square => tessellation::LineCap::Square,
-        usvg::LineCap::Round => tessellation::LineCap::Round,
-    };
-    let linejoin = match s.linejoin {
-        usvg::LineJoin::Miter => tessellation::LineJoin::Miter,
-        usvg::LineJoin::Bevel => tessellation::LineJoin::Bevel,
-        usvg::LineJoin::Round => tessellation::LineJoin::Round,
-    };
-
-    let opt = StrokeOptions::tolerance(0.01)
-        .with_line_width(s.width.value() as f32)
-        .with_line_cap(linecap)
-        .with_line_join(linejoin);
-
-    (color, s.opacity, opt)
 }

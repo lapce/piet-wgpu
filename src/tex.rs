@@ -6,12 +6,12 @@ const MAX_INSTANCES: usize = 100_000;
 
 pub struct Pipeline {
     program: <glow::Context as HasContext>::Program,
+    mask_program: <glow::Context as HasContext>::Program,
     vertex_array: <glow::Context as HasContext>::VertexArray,
     instances: <glow::Context as HasContext>::Buffer,
     scale_location: <glow::Context as HasContext>::UniformLocation,
     view_proj: <glow::Context as HasContext>::UniformLocation,
     depth_location: <glow::Context as HasContext>::UniformLocation,
-    current_scale: f32,
 }
 
 impl Pipeline {
@@ -22,6 +22,16 @@ impl Pipeline {
                 &[
                     (glow::VERTEX_SHADER, include_str!("./shader/tex.vert")),
                     (glow::FRAGMENT_SHADER, include_str!("./shader/tex.frag")),
+                ],
+            )
+        };
+
+        let mask_program = unsafe {
+            create_program(
+                gl,
+                &[
+                    (glow::VERTEX_SHADER, include_str!("./shader/mask.vert")),
+                    (glow::FRAGMENT_SHADER, include_str!("./shader/mask.frag")),
                 ],
             )
         };
@@ -47,10 +57,10 @@ impl Pipeline {
             vertex_array,
             instances,
             program,
+            mask_program,
             scale_location,
             depth_location,
             view_proj,
-            current_scale: 1.0,
         }
     }
 
@@ -62,26 +72,24 @@ impl Pipeline {
         view_proj: &[f32],
         max_depth: u32,
         texture: glow::Texture,
+        mask: bool,
     ) {
         if instances.is_empty() {
             return;
         }
 
         unsafe {
-            gl.use_program(Some(self.program));
+            if mask {
+                gl.use_program(Some(self.mask_program));
+            } else {
+                gl.use_program(Some(self.program));
+            }
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             gl.bind_vertex_array(Some(self.vertex_array));
             gl.uniform_matrix_4_f32_slice(Some(&self.view_proj), false, view_proj);
             gl.uniform_1_f32(Some(&self.depth_location), max_depth as f32);
-        }
-
-        if scale != self.current_scale {
-            unsafe {
-                gl.uniform_1_f32(Some(&self.scale_location), scale);
-            }
-
-            self.current_scale = scale;
+            gl.uniform_1_f32(Some(&self.scale_location), scale);
         }
 
         unsafe {

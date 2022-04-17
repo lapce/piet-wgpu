@@ -40,6 +40,7 @@ pub(crate) struct Layer {
     pub triangles: VertexBuffers<Vertex, u32>,
     pub transparent_triangles: VertexBuffers<Vertex, u32>,
     pub texts: Vec<Tex>,
+    pub svgs: Vec<Tex>,
 }
 
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
@@ -101,6 +102,7 @@ impl Layer {
             transparent_quads: Vec::new(),
             transparent_triangles: VertexBuffers::new(),
             texts: Vec::new(),
+            svgs: Vec::new(),
         }
     }
 
@@ -142,6 +144,10 @@ impl Layer {
         self.texts.append(&mut text);
     }
 
+    pub fn add_svg(&mut self, svg: Tex) {
+        self.svgs.push(svg);
+    }
+
     fn draw(&self, renderer: &mut WgpuRenderer, max_depth: u32) {
         let view_proj = create_view_proj(renderer.size.width as f32, renderer.size.height as f32);
         let scale = renderer.scale;
@@ -154,6 +160,15 @@ impl Layer {
             scale,
             &view_proj,
             max_depth,
+        );
+        renderer.tex_pipeline.draw(
+            &renderer.gl,
+            &self.svgs,
+            scale,
+            &view_proj,
+            max_depth,
+            renderer.svg_store.cache.gl_texture,
+            false,
         );
 
         unsafe {
@@ -169,6 +184,7 @@ impl Layer {
             &view_proj,
             max_depth,
             renderer.text.cache.borrow().gl_texture,
+            true,
         );
 
         unsafe {
@@ -257,51 +273,37 @@ impl<'a> WgpuRenderContext<'a> {
     }
 
     pub fn draw_svg(&mut self, svg: &Svg, rect: Rect, override_color: Option<&Color>) {
-        let view_box = svg.tree.svg_node().view_box;
-        let view_rect = view_box.rect;
-        let scale =
-            (rect.width() / view_rect.width()).min(rect.height() / view_rect.height()) as f32;
-
-        let translate = [rect.x0 as f32, rect.y0 as f32];
-        let override_color = override_color.map(|c| format_color(c));
-        let svg_data = self.renderer.svg_store.get_svg_data(svg);
-        let transforms = svg_data.transforms.clone();
-        let offset = self.geometry.vertices.len() as u32;
-
-        let primitive_id = self.primitives.len() as u32;
-        for transform in transforms {
-            self.add_primitive();
-            let primitive = self.primitives.last_mut().unwrap();
-            primitive.transform_1[0] *= scale * transform[0];
-            primitive.transform_1[3] *= scale * transform[3];
-            primitive.transform_2[0] += scale * transform[4];
-            primitive.transform_2[1] += scale * transform[5];
+        let depth = self.depth as f32;
+        let affine = self.cur_transform.as_coeffs();
+        let clip = self.current_clip();
+        let scale = self.renderer.scale;
+        if let Ok(svg) = self.renderer.svg_store.cache.get_svg(
+            &self.renderer.gl,
+            svg,
+            [rect.width() as f32 * scale, rect.height() as f32 * scale],
+        ) {
+            let color = override_color
+                .map(format_color)
+                .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+            let tex = Tex {
+                rect: [
+                    (rect.x0 + affine[4]).round() as f32,
+                    (rect.y0 + affine[5]).round() as f32,
+                    (rect.x1 + affine[4]).round() as f32,
+                    (rect.y1 + affine[5]).round() as f32,
+                ],
+                tex_rect: [
+                    svg.cache_rect.x0 as f32,
+                    svg.cache_rect.y0 as f32,
+                    svg.cache_rect.x1 as f32,
+                    svg.cache_rect.y1 as f32,
+                ],
+                color,
+                depth,
+                clip,
+            };
+            self.layer.add_svg(tex);
         }
-        self.add_primitive();
-
-        let svg_data = self.renderer.svg_store.get_svg_data(svg);
-        let mut vertices = svg_data
-            .geometry
-            .vertices
-            .iter()
-            .map(|v| {
-                let mut v = v.clone();
-                v.translate = translate;
-                v.primitive_id = primitive_id + v.primitive_id;
-                if let Some(c) = override_color.clone() {
-                    v.color = c;
-                }
-                v
-            })
-            .collect();
-        let mut indices = svg_data
-            .geometry
-            .indices
-            .iter()
-            .map(|i| *i + offset)
-            .collect();
-        self.geometry.vertices.append(&mut vertices);
-        self.geometry.indices.append(&mut indices);
     }
 }
 

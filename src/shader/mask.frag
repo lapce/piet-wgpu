@@ -5,7 +5,8 @@ in vec2 v_tex_pos;
 in vec4 v_clip;
 layout(origin_upper_left) in vec4 gl_FragCoord;
 
-out vec4 o_color;
+out vec4 o_frag_color;
+out vec4 o_frag_alpha;
 
 uniform sampler2D tex;
 
@@ -41,11 +42,8 @@ void main() {
             discard;
         }
     }
-    vec4 color = texture(tex, v_tex_pos);
-    if (v_color.a > 0.0) {
-        o_color = v_color;
-        o_color.a = color.a;
-    } else {
-        o_color = color;
-    }
+    vec4 frag = v_color;
+    vec4 alpha = texture(tex, v_tex_pos);
+    o_frag_color = vec4(v_color.xyz, 1.0);
+    o_frag_alpha = alpha;
 }
