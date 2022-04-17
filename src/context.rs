@@ -653,14 +653,6 @@ impl Image for WgpuImage {
     }
 }
 
-pub fn from_linear(x: f32) -> f32 {
-    if x <= 0.04045 {
-        x * (1.0 / 12.92)
-    } else {
-        ((x + 0.055) * (1.0 / 1.055)).powf(2.4)
-    }
-}
-
 pub fn format_color(color: &Color) -> [f32; 4] {
     let color = color.as_rgba();
     [

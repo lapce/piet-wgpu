@@ -56,7 +56,7 @@ impl WgpuRenderer {
         };
 
         let gl = Rc::new(gl);
-        let text = WgpuText::new(gl.clone());
+        let text = WgpuText::new(&gl);
         let quad_pipeline = quad::Pipeline::new(&gl);
         let blur_quad_pipeline = blur_quad::Pipeline::new(&gl);
         let triangle_pipeline = triangle::Pipeline::new(&gl);

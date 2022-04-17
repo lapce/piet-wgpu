@@ -40,15 +40,13 @@ pub struct WgpuText {
     fcx: Rc<RefCell<FontContext>>,
     lcx: RcLayoutContext<ParleyBrush>,
 
-    gl: Rc<glow::Context>,
     pub(crate) cache: Rc<RefCell<Cache>>,
 }
 
 impl WgpuText {
-    pub(crate) fn new(gl: Rc<glow::Context>) -> Self {
+    pub(crate) fn new(gl: &glow::Context) -> Self {
         Self {
-            cache: Rc::new(RefCell::new(Cache::new(&gl, 2000, 2000))),
-            gl,
+            cache: Rc::new(RefCell::new(Cache::new(gl, 2000, 2000))),
             fcx: Rc::new(RefCell::new(FontContext::new())),
             lcx: RcLayoutContext::new(),
         }

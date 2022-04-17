@@ -245,12 +245,6 @@ impl SvgStore {
     }
 }
 
-pub const FALLBACK_COLOR: usvg::Color = usvg::Color {
-    red: 0,
-    green: 0,
-    blue: 0,
-};
-
 fn svg_rect_to_pos(glyph_rect: Rect, origin: Point, scale: f64, size: [u32; 2]) -> SvgPosInfo {
     let mut cache_rect = glyph_rect.with_origin(origin);
     cache_rect.x0 /= size[0] as f64;
