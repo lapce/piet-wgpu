@@ -139,17 +139,13 @@ impl Cache {
             .embolden(embolden)
             .render_into(&mut scaler, glyph.id, &mut self.glyph_image);
 
-        let font_metrics = font.as_ref().metrics(&[0]);
-        let units_per_em = font_metrics.units_per_em as f32;
-        let ascent = (font_metrics.ascent / units_per_em * font_size as f32) as f64 / scale;
-
         let glyph_width = self.glyph_image.placement.width;
         let glyph_height = self.glyph_image.placement.height;
         let glyph_rect = Size::new(glyph_width as f64, glyph_height as f64)
             .to_rect()
             .with_origin(Point::new(
                 self.glyph_image.placement.left as f64 / scale,
-                ((ascent * scale).ceil() - self.glyph_image.placement.top as f64) / scale,
+                self.glyph_image.placement.top as f64 / scale,
             ));
 
         let mut offset = [0, 0];

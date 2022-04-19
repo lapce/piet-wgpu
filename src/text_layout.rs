@@ -75,9 +75,6 @@ impl WgpuTextLayout {
         let mut cache = ctx.renderer.text.cache.borrow_mut();
         let scale = cache.scale as f32;
         for line in self.layout.lines() {
-            let line_metrics = line.metrics();
-            let y =
-                line_metrics.baseline - (line_metrics.ascent + line_metrics.leading * 0.5).round();
             for run in line.glyph_runs() {
                 let font = run.run().font();
                 let font_size = run.run().font_size();
@@ -85,12 +82,13 @@ impl WgpuTextLayout {
                     if let Ok(pos) = cache.get_glyph(&glyph, font, font_size, &ctx.renderer.gl) {
                         let color = &self.layout.styles()[glyph.style_index()].brush.0.as_rgba();
                         let x = (glyph.x * scale + 0.125).floor() / scale;
+                        let y = glyph.y + translate[1] - pos.rect.y0 as f32;
                         let instance = Tex {
                             rect: [
                                 pos.rect.x0 as f32 + x + translate[0],
-                                pos.rect.y0 as f32 + y + translate[1],
+                                y,
                                 pos.rect.x1 as f32 + x + translate[0],
-                                pos.rect.y1 as f32 + y + translate[1],
+                                y + pos.rect.height() as f32,
                             ],
                             tex_rect: [
                                 pos.cache_rect.x0 as f32,
