@@ -167,6 +167,13 @@ impl Layer {
             &view_proj,
             max_depth,
         );
+
+        unsafe {
+            renderer.gl.enable(glow::BLEND);
+            renderer
+                .gl
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        }
         renderer.tex_pipeline.draw(
             &renderer.gl,
             &self.svgs,
@@ -187,6 +194,7 @@ impl Layer {
         );
 
         unsafe {
+            renderer.gl.depth_mask(false);
             renderer.gl.enable(glow::BLEND);
             renderer
                 .gl
@@ -209,16 +217,16 @@ impl Layer {
                 .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
         }
 
-        renderer.blur_quad_pipeline.draw(
+        renderer.quad_pipeline.draw(
             &renderer.gl,
-            &self.blurred_quads,
+            &self.transparent_quads,
             scale,
             &view_proj,
             max_depth,
         );
-        renderer.quad_pipeline.draw(
+        renderer.blur_quad_pipeline.draw(
             &renderer.gl,
-            &self.transparent_quads,
+            &self.blurred_quads,
             scale,
             &view_proj,
             max_depth,
@@ -230,6 +238,11 @@ impl Layer {
             &view_proj,
             max_depth,
         );
+
+        unsafe {
+            renderer.gl.disable(glow::BLEND);
+            renderer.gl.depth_mask(true);
+        }
     }
 
     fn reset(&mut self) {
