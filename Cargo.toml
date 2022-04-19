@@ -21,8 +21,8 @@ pathfinder_geometry = "0.5.1"
 lyon = "0.17.5"
 piet = "0.4.0"
 swash = { git = "https://github.com/dfrg/swash" }
-# parley = { git = "https://github.com/lapce/parley" }
-parley = { path = "../workspaces/parley" }
+parley = { git = "https://github.com/lapce/parley" }
+# parley = { path = "../workspaces/parley" }
 glow = "0.11.2"
 glutin = { git = "https://github.com/lapce/glutin", branch = "new-keyboard-all" }
 glam = "0.10"
