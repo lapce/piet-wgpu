@@ -100,6 +100,7 @@ impl Cache {
     pub(crate) fn get_glyph(
         &mut self,
         glyph: &Glyph,
+        x: f32,
         font: &parley::Font,
         font_size: f32,
         gl: &glow::Context,
@@ -107,7 +108,7 @@ impl Cache {
         let scale = self.scale;
         let font_size = (font_size as f64 * scale).round() as u32;
         let subpx = [
-            SubpixelOffset::quantize(glyph.x * scale as f32),
+            SubpixelOffset::quantize(x * scale as f32),
             SubpixelOffset::quantize(0.0),
         ];
 

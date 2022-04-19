@@ -70,7 +70,7 @@ impl WgpuTextLayout {
         let affine = ctx.cur_transform.as_coeffs();
         let clip = ctx.current_clip();
         let translate = [
-            (translate[0] + affine[4] as f32).round(),
+            (translate[0] + affine[4] as f32),
             (translate[1] + affine[5] as f32).round(),
         ];
 
@@ -83,15 +83,16 @@ impl WgpuTextLayout {
                 let font = run.run().font();
                 let font_size = run.run().font_size();
                 for glyph in run.positioned_glyphs() {
-                    if let Ok(pos) = cache.get_glyph(&glyph, font, font_size, &ctx.renderer.gl) {
+                    let x = glyph.x + translate[0];
+                    if let Ok(pos) = cache.get_glyph(&glyph, x, font, font_size, &ctx.renderer.gl) {
                         let color = &self.layout.styles()[glyph.style_index()].brush.0.as_rgba();
-                        let x = (glyph.x * scale + 0.125).floor() / scale;
+                        let x = (x * scale + 0.125).floor() / scale;
                         let y = glyph.y + translate[1] - pos.rect.y0 as f32;
                         let instance = Tex {
                             rect: [
-                                pos.rect.x0 as f32 + x + translate[0],
+                                pos.rect.x0 as f32 + x,
                                 y,
-                                pos.rect.x1 as f32 + x + translate[0],
+                                pos.rect.x1 as f32 + x,
                                 y + pos.rect.height() as f32,
                             ],
                             tex_rect: [
