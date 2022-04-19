@@ -16,6 +16,8 @@ use swash::scale::image::Content;
 use crate::context::{Tex, WgpuRenderContext};
 use crate::text::Cache;
 
+const DEFAULT_FONT: &[u8] = include_bytes!("../fonts/CascadiaCode.ttf");
+
 impl Brush for ParleyBrush {}
 
 #[derive(Clone, PartialEq, Debug)]
@@ -46,11 +48,13 @@ pub struct WgpuText {
 
 impl WgpuText {
     pub(crate) fn new(gl: &glow::Context) -> Self {
-        Self {
+        let mut t = Self {
             cache: Rc::new(RefCell::new(Cache::new(gl, 2000, 2000))),
             fcx: Rc::new(RefCell::new(FontContext::new())),
             lcx: RcLayoutContext::new(),
-        }
+        };
+        t.load_font(DEFAULT_FONT);
+        t
     }
 }
 
