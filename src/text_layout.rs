@@ -11,6 +11,7 @@ use piet::{
     TextLayoutBuilder, TextStorage,
 };
 use piet::{Color, FontFamilyInner, TextAlignment};
+use swash::scale::image::Content;
 
 use crate::context::{Tex, WgpuRenderContext};
 use crate::text::Cache;
@@ -70,6 +71,7 @@ impl WgpuTextLayout {
         ];
 
         let mut instances = Vec::new();
+        let mut color_instances = Vec::new();
         let mut cache = ctx.renderer.text.cache.borrow_mut();
         let scale = cache.scale as f32;
         for line in self.layout.lines() {
@@ -96,22 +98,31 @@ impl WgpuTextLayout {
                                 pos.cache_rect.x1 as f32,
                                 pos.cache_rect.y1 as f32,
                             ],
-                            color: [
-                                color.0 as f32,
-                                color.1 as f32,
-                                color.2 as f32,
-                                color.3 as f32,
-                            ],
+                            color: if let Content::Color = pos.content {
+                                [0.0, 0.0, 0.0, 0.0]
+                            } else {
+                                [
+                                    color.0 as f32,
+                                    color.1 as f32,
+                                    color.2 as f32,
+                                    color.3 as f32,
+                                ]
+                            },
                             depth,
                             clip,
                         };
-                        instances.push(instance);
+                        if let Content::Color = pos.content {
+                            color_instances.push(instance);
+                        } else {
+                            instances.push(instance);
+                        }
                     }
                 }
             }
         }
 
         ctx.layer.add_text(instances);
+        ctx.layer.add_color_text(color_instances);
     }
 }
 

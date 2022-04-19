@@ -40,6 +40,7 @@ pub(crate) struct Layer {
     pub triangles: VertexBuffers<Vertex, u32>,
     pub transparent_triangles: VertexBuffers<Vertex, u32>,
     pub texts: Vec<Tex>,
+    pub color_texts: Vec<Tex>,
     pub svgs: Vec<Tex>,
 }
 
@@ -102,6 +103,7 @@ impl Layer {
             transparent_quads: Vec::new(),
             transparent_triangles: VertexBuffers::new(),
             texts: Vec::new(),
+            color_texts: Vec::new(),
             svgs: Vec::new(),
         }
     }
@@ -144,6 +146,10 @@ impl Layer {
         self.texts.append(&mut text);
     }
 
+    pub fn add_color_text(&mut self, mut text: Vec<Tex>) {
+        self.color_texts.append(&mut text);
+    }
+
     pub fn add_svg(&mut self, svg: Tex) {
         self.svgs.push(svg);
     }
@@ -168,6 +174,15 @@ impl Layer {
             &view_proj,
             max_depth,
             renderer.svg_store.cache.gl_texture,
+            false,
+        );
+        renderer.tex_pipeline.draw(
+            &renderer.gl,
+            &self.color_texts,
+            scale,
+            &view_proj,
+            max_depth,
+            renderer.text.cache.borrow().gl_texture,
             false,
         );
 

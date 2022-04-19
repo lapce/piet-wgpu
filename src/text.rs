@@ -4,7 +4,10 @@ use linked_hash_map::LinkedHashMap;
 use parley::layout::Glyph;
 use piet::kurbo::{Point, Rect, Size};
 use swash::{
-    scale::{image::Image, Render, ScaleContext, Source, StrikeWith},
+    scale::{
+        image::{Content, Image},
+        Render, ScaleContext, Source, StrikeWith,
+    },
     zeno::{self, Vector},
 };
 
@@ -154,8 +157,13 @@ impl Cache {
         for (row_number, row) in self.rows.iter_mut().rev() {
             if row.height == glyph_height && self.width - row.width > glyph_width {
                 let origin = Point::new(row.width as f64, row.y as f64);
-                let glyph_pos =
-                    glyph_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+                let glyph_pos = glyph_rect_to_pos(
+                    glyph_rect,
+                    origin,
+                    scale,
+                    [self.width, self.height],
+                    self.glyph_image.content,
+                );
 
                 row.glyphs.push(glyph_pos);
                 offset[0] = row.width;
@@ -179,7 +187,13 @@ impl Cache {
             }
 
             let origin = Point::new(0.0, y as f64);
-            let glyph_pos = glyph_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+            let glyph_pos = glyph_rect_to_pos(
+                glyph_rect,
+                origin,
+                scale,
+                [self.width, self.height],
+                self.glyph_image.content,
+            );
 
             offset[0] = 0;
             offset[1] = y;
@@ -240,11 +254,18 @@ pub(crate) struct GlyphInfo {
 
 #[derive(Default, Clone)]
 pub(crate) struct GlyphPosInfo {
+    pub(crate) content: Content,
     pub(crate) rect: Rect,
     pub(crate) cache_rect: Rect,
 }
 
-fn glyph_rect_to_pos(glyph_rect: Rect, origin: Point, scale: f64, size: [u32; 2]) -> GlyphPosInfo {
+fn glyph_rect_to_pos(
+    glyph_rect: Rect,
+    origin: Point,
+    scale: f64,
+    size: [u32; 2],
+    content: Content,
+) -> GlyphPosInfo {
     let mut cache_rect = glyph_rect.with_origin(origin);
     cache_rect.x0 /= size[0] as f64;
     cache_rect.x1 /= size[0] as f64;
@@ -252,6 +273,7 @@ fn glyph_rect_to_pos(glyph_rect: Rect, origin: Point, scale: f64, size: [u32; 2]
     cache_rect.y1 /= size[1] as f64;
 
     GlyphPosInfo {
+        content,
         rect: glyph_rect.with_size(Size::new(
             glyph_rect.size().width / scale,
             glyph_rect.size().height / scale,
