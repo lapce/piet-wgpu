@@ -83,6 +83,9 @@ impl WgpuTextLayout {
                 let font = run.run().font();
                 let font_size = run.run().font_size();
                 for glyph in run.positioned_glyphs() {
+                    if glyph.id == 0 {
+                        continue;
+                    }
                     let x = glyph.x + translate[0];
                     if let Ok(pos) = cache.get_glyph(&glyph, x, font, font_size, &ctx.renderer.gl) {
                         let color = &self.layout.styles()[glyph.style_index()].brush.0.as_rgba();
@@ -136,7 +139,13 @@ pub struct WgpuTextLayoutBuilder {
     alignment: layout::Alignment,
 }
 
-impl WgpuTextLayoutBuilder {}
+impl WgpuTextLayoutBuilder {
+    pub fn set_tab_width(mut self, tab_width: f64) -> Self {
+        self.builder
+            .push_default(&style::StyleProperty::TabWidth(tab_width as f32));
+        self
+    }
+}
 
 impl Text for WgpuText {
     type TextLayoutBuilder = WgpuTextLayoutBuilder;
