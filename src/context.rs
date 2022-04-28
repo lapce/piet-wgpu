@@ -155,6 +155,14 @@ impl Layer {
     }
 
     fn draw(&self, renderer: &mut WgpuRenderer, max_depth: u32) {
+        unsafe {
+            renderer.gl.disable(glow::BLEND);
+            renderer.gl.blend_equation(glow::FUNC_ADD);
+            renderer
+                .gl
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        }
+
         let view_proj = create_view_proj(renderer.size.width as f32, renderer.size.height as f32);
         let scale = renderer.scale;
         renderer
