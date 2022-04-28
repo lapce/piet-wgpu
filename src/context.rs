@@ -170,6 +170,7 @@ impl Layer {
 
         unsafe {
             renderer.gl.enable(glow::BLEND);
+            renderer.gl.blend_equation(glow::FUNC_ADD);
             renderer
                 .gl
                 .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
@@ -196,6 +197,7 @@ impl Layer {
         unsafe {
             renderer.gl.depth_mask(false);
             renderer.gl.enable(glow::BLEND);
+            renderer.gl.blend_equation(glow::FUNC_ADD);
             renderer
                 .gl
                 .blend_func(glow::SRC1_COLOR, glow::ONE_MINUS_SRC1_COLOR);
