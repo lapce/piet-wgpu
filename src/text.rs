@@ -145,8 +145,8 @@ impl Cache {
         let glyph_rect = Size::new(glyph_width as f64, glyph_height as f64)
             .to_rect()
             .with_origin(Point::new(
-                self.glyph_image.placement.left as f64 / scale,
-                self.glyph_image.placement.top as f64 / scale,
+                self.glyph_image.placement.left as f64,
+                self.glyph_image.placement.top as f64,
             ));
 
         let mut offset = [0, 0];
@@ -157,7 +157,6 @@ impl Cache {
                 let glyph_pos = glyph_rect_to_pos(
                     glyph_rect,
                     origin,
-                    scale,
                     [self.width, self.height],
                     self.glyph_image.content,
                 );
@@ -187,7 +186,6 @@ impl Cache {
             let glyph_pos = glyph_rect_to_pos(
                 glyph_rect,
                 origin,
-                scale,
                 [self.width, self.height],
                 self.glyph_image.content,
             );
@@ -259,7 +257,6 @@ pub(crate) struct GlyphPosInfo {
 fn glyph_rect_to_pos(
     glyph_rect: Rect,
     origin: Point,
-    scale: f64,
     size: [u32; 2],
     content: Content,
 ) -> GlyphPosInfo {
@@ -271,10 +268,7 @@ fn glyph_rect_to_pos(
 
     GlyphPosInfo {
         content,
-        rect: glyph_rect.with_size(Size::new(
-            glyph_rect.size().width / scale,
-            glyph_rect.size().height / scale,
-        )),
+        rect: glyph_rect.with_size(Size::new(glyph_rect.size().width, glyph_rect.size().height)),
         cache_rect,
     }
 }

@@ -66,18 +66,24 @@ pub struct WgpuTextLayout {
 
 impl WgpuTextLayout {
     pub(crate) fn draw_text(&self, ctx: &mut WgpuRenderContext, translate: [f32; 2]) {
+        let mut instances = Vec::new();
+        let mut color_instances = Vec::new();
+        let mut cache = ctx.renderer.text.cache.borrow_mut();
+        let scale = cache.scale as f32;
         let depth = ctx.depth as f32;
         let affine = ctx.cur_transform.as_coeffs();
         let clip = ctx.current_clip();
+        let clip = [
+            clip[0] * scale,
+            clip[1] * scale,
+            clip[2] * scale,
+            clip[3] * scale,
+        ];
         let translate = [
             (translate[0] + affine[4] as f32),
             (translate[1] + affine[5] as f32).round(),
         ];
 
-        let mut instances = Vec::new();
-        let mut color_instances = Vec::new();
-        let mut cache = ctx.renderer.text.cache.borrow_mut();
-        let scale = cache.scale as f32;
         for line in self.layout.lines() {
             for run in line.glyph_runs() {
                 let font = run.run().font();
@@ -89,8 +95,8 @@ impl WgpuTextLayout {
                     let x = glyph.x + translate[0];
                     if let Ok(pos) = cache.get_glyph(&glyph, x, font, font_size, &ctx.renderer.gl) {
                         let color = &self.layout.styles()[glyph.style_index()].brush.0.as_rgba();
-                        let x = (x * scale + 0.125).floor() / scale;
-                        let y = glyph.y + translate[1] - pos.rect.y0 as f32;
+                        let x = (x * scale + 0.125).floor();
+                        let y = ((glyph.y + translate[1]) * scale - pos.rect.y0 as f32).round();
                         let instance = Tex {
                             rect: [
                                 pos.rect.x0 as f32 + x,
