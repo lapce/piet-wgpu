@@ -177,6 +177,24 @@ impl Layer {
         );
 
         unsafe {
+            renderer.gl.depth_mask(false);
+            renderer.gl.enable(glow::BLEND);
+            renderer.gl.blend_equation(glow::FUNC_ADD);
+            renderer
+                .gl
+                .blend_func(glow::SRC1_COLOR, glow::ONE_MINUS_SRC1_COLOR);
+        }
+        renderer.tex_pipeline.draw(
+            &renderer.gl,
+            &self.texts,
+            1.0,
+            &view_proj,
+            max_depth,
+            renderer.text.cache.borrow().gl_texture,
+            true,
+        );
+
+        unsafe {
             renderer.gl.enable(glow::BLEND);
             renderer.gl.blend_equation(glow::FUNC_ADD);
             renderer
@@ -201,31 +219,6 @@ impl Layer {
             renderer.text.cache.borrow().gl_texture,
             false,
         );
-
-        unsafe {
-            renderer.gl.depth_mask(false);
-            renderer.gl.enable(glow::BLEND);
-            renderer.gl.blend_equation(glow::FUNC_ADD);
-            renderer
-                .gl
-                .blend_func(glow::SRC1_COLOR, glow::ONE_MINUS_SRC1_COLOR);
-        }
-        renderer.tex_pipeline.draw(
-            &renderer.gl,
-            &self.texts,
-            1.0,
-            &view_proj,
-            max_depth,
-            renderer.text.cache.borrow().gl_texture,
-            true,
-        );
-
-        unsafe {
-            renderer.gl.enable(glow::BLEND);
-            renderer
-                .gl
-                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-        }
 
         renderer.quad_pipeline.draw(
             &renderer.gl,
