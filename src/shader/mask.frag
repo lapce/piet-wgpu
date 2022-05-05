@@ -5,8 +5,8 @@ in vec2 v_tex_pos;
 in vec4 v_clip;
 layout(origin_upper_left) in vec4 gl_FragCoord;
 
-out vec4 o_frag_color;
-out vec4 o_frag_alpha;
+layout(location = 0, index = 0) out vec4 o_frag_color;
+layout(location = 0, index = 1) out vec4 o_frag_alpha;
 
 uniform sampler2D tex;
 
