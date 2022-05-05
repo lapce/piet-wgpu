@@ -22,5 +22,5 @@ void main() {
     );
 
     gl_Position = view_proj * vec4(i_pos.x * u_scale, i_pos.y * u_scale, 0.0, 1.0);
-    gl_Position.z = - i_depth / u_depth;
+    gl_Position.z = 1.0 - i_depth / u_depth;
 }
