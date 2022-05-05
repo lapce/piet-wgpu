@@ -1,4 +1,4 @@
-#version 330
+#version 410
 
 uniform float u_scale;
 uniform float u_depth;
