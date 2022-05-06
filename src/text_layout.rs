@@ -151,6 +151,12 @@ impl WgpuTextLayoutBuilder {
             .push_default(&style::StyleProperty::TabWidth(tab_width as f32));
         self
     }
+
+    pub fn set_line_height(mut self, line_height: f64) -> Self {
+        self.builder
+            .push_default(&style::StyleProperty::LineHeight(line_height as f32));
+        self
+    }
 }
 
 impl Text for WgpuText {
@@ -224,7 +230,6 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
     }
 
     fn build(mut self) -> Result<Self::Out, piet::Error> {
-        self.builder.push_default(&StyleProperty::LineHeight(1.5));
         let mut layout = self.builder.build();
         layout.break_all_lines(Some(self.max_width as f32), self.alignment);
         Ok(WgpuTextLayout {
