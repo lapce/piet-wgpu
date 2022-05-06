@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use parley::context::{RangedBuilder, RcLayoutContext, TextSource};
 use parley::layout::Cursor;
-use parley::style::{self, Brush};
+use parley::style::{self, Brush, StyleProperty};
 use parley::{layout, FontContext, Layout};
 use piet::kurbo::Rect;
 use piet::{
@@ -224,6 +224,7 @@ impl TextLayoutBuilder for WgpuTextLayoutBuilder {
     }
 
     fn build(mut self) -> Result<Self::Out, piet::Error> {
+        self.builder.push_default(&StyleProperty::LineHeight(1.5));
         let mut layout = self.builder.build();
         layout.break_all_lines(Some(self.max_width as f32), self.alignment);
         Ok(WgpuTextLayout {
