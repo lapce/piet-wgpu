@@ -287,11 +287,7 @@ impl<'a> WgpuRenderContext<'a> {
     }
 
     pub(crate) fn current_clip(&self) -> [f32; 4] {
-        self.get_current_clip().unwrap_or([0., 0., 0., 0.])
-    }
-
-    pub fn get_current_clip(&self) -> Option<[f32; 4]> {
-        self.clip_stack.last().cloned()
+        self.clip_stack.last().cloned().unwrap_or([0., 0., 0., 0.])
     }
 
     fn add_primitive(&mut self) {
@@ -338,36 +334,6 @@ impl<'a> WgpuRenderContext<'a> {
                 clip,
             };
             self.layer.add_svg(tex);
-        }
-    }
-
-    pub fn clip_override(&mut self, shape: impl Shape) {
-        if let Some(rect) = shape.as_rect() {
-            let affine = self.cur_transform.as_coeffs();
-            let rect = rect + Vec2::new(affine[4], affine[5]);
-            self.clip_stack.push([
-                rect.x0 as f32,
-                rect.y0 as f32,
-                rect.x1 as f32,
-                rect.y1 as f32,
-            ]);
-            if let Some(state) = self.state_stack.last_mut() {
-                state.n_clip += 1;
-            }
-            self.add_primitive();
-        }
-    }
-
-    pub fn clip_nested(&mut self, shape: impl Shape) {
-        if let Some([x0, y0, x1, y1]) = self.get_current_clip() {
-            let current = Rect::new(x0 as f64, y0 as f64, x1 as f64, y1 as f64);
-
-            if let Some(rect) = shape.as_rect() {
-                let rect = rect.intersect(current);
-                self.clip(rect);
-            } else {
-                self.clip(shape);
-            }
         }
     }
 }
@@ -543,7 +509,20 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     }
 
     fn clip(&mut self, shape: impl Shape) {
-        self.clip_nested(shape);
+        if let Some(rect) = shape.as_rect() {
+            let affine = self.cur_transform.as_coeffs();
+            let rect = rect + Vec2::new(affine[4], affine[5]);
+            self.clip_stack.push([
+                rect.x0 as f32,
+                rect.y0 as f32,
+                rect.x1 as f32,
+                rect.y1 as f32,
+            ]);
+            if let Some(state) = self.state_stack.last_mut() {
+                state.n_clip += 1;
+            }
+            self.add_primitive();
+        }
     }
 
     fn text(&mut self) -> &mut Self::Text {
