@@ -341,20 +341,25 @@ impl<'a> WgpuRenderContext<'a> {
         }
     }
 
+    fn add_clip_rect(&mut self, rect: Rect) {
+        self.clip_stack.push([
+            rect.x0 as f32,
+            rect.y0 as f32,
+            rect.x1 as f32,
+            rect.y1 as f32,
+        ]);
+        if let Some(state) = self.state_stack.last_mut() {
+            state.n_clip += 1;
+        }
+        self.add_primitive();
+    }
+
     pub fn clip_override(&mut self, shape: impl Shape) {
         if let Some(rect) = shape.as_rect() {
             let affine = self.cur_transform.as_coeffs();
             let rect = rect + Vec2::new(affine[4], affine[5]);
-            self.clip_stack.push([
-                rect.x0 as f32,
-                rect.y0 as f32,
-                rect.x1 as f32,
-                rect.y1 as f32,
-            ]);
-            if let Some(state) = self.state_stack.last_mut() {
-                state.n_clip += 1;
-            }
-            self.add_primitive();
+
+            self.add_clip_rect(rect);
         }
     }
 
@@ -363,11 +368,14 @@ impl<'a> WgpuRenderContext<'a> {
             let current = Rect::new(x0 as f64, y0 as f64, x1 as f64, y1 as f64);
 
             if let Some(rect) = shape.as_rect() {
+                let affine = self.cur_transform.as_coeffs();
+                let rect = rect + Vec2::new(affine[4], affine[5]);
                 let rect = rect.intersect(current);
-                self.clip(rect);
-            } else {
-                self.clip(shape);
+
+                self.add_clip_rect(rect);
             }
+        } else {
+            self.clip(shape);
         }
     }
 }
