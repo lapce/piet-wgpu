@@ -375,7 +375,7 @@ impl<'a> WgpuRenderContext<'a> {
                 self.add_clip_rect(rect);
             }
         } else {
-            self.clip(shape);
+            self.clip_override(shape);
         }
     }
 }
