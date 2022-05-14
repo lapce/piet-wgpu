@@ -16,7 +16,7 @@ pub use piet::*;
 pub use svg::Svg;
 use svg::SvgStore;
 
-use std::{marker::PhantomData, rc::Rc};
+use std::{marker::PhantomData, path::Path, rc::Rc};
 
 use context::{WgpuImage, WgpuRenderContext};
 use text_layout::{WgpuText, WgpuTextLayout, WgpuTextLayoutBuilder};
@@ -48,12 +48,11 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    pub fn new(
-        context: &glutin::ContextWrapper<glutin::PossiblyCurrent, glutin::window::Window>,
-    ) -> Result<Self, piet::Error> {
-        let gl = unsafe {
-            glow::Context::from_loader_function(|s| context.get_proc_address(s) as *const _)
-        };
+    pub fn new<F>(loader_function: F) -> Result<Self, piet::Error>
+    where
+        F: FnMut(&str) -> *const std::os::raw::c_void,
+    {
+        let gl = unsafe { glow::Context::from_loader_function(loader_function) };
 
         let gl = Rc::new(gl);
         let text = WgpuText::new(&gl);
@@ -101,7 +100,37 @@ pub struct Device {
 
 unsafe impl Send for Device {}
 
+impl Device {
+    /// Create a new device.
+    pub fn new() -> Result<Device, piet::Error> {
+        Ok(Device {
+            marker: std::marker::PhantomData,
+        })
+    }
+
+    /// Create a new bitmap target.
+    pub fn bitmap_target(
+        &mut self,
+        _width: usize,
+        _height: usize,
+        _pix_scale: f64,
+    ) -> Result<BitmapTarget, piet::Error> {
+        let phantom = Default::default();
+        Ok(BitmapTarget { phantom })
+    }
+}
+
 /// A struct provides a `RenderContext` and then can have its bitmap extracted.
 pub struct BitmapTarget<'a> {
     phantom: PhantomData<&'a ()>,
+}
+
+impl<'a> BitmapTarget<'a> {
+    pub fn to_image_buf(&mut self, _fmt: ImageFormat) -> Result<ImageBuf, piet::Error> {
+        Ok(ImageBuf::empty())
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(self, _path: P) -> Result<(), piet::Error> {
+        Err(piet::Error::Unimplemented)
+    }
 }
