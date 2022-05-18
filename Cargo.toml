@@ -24,6 +24,5 @@ swash = { git = "https://github.com/lapce/swash" }
 parley = { git = "https://github.com/lapce/parley" }
 # parley = { path = "../workspaces/parley" }
 glow = "0.11.2"
-glutin = { git = "https://github.com/lapce/glutin", branch = "new-keyboard-all" }
 glam = "0.10"
 bytemuck = { version = "1.7.2", features = ["derive"] }
