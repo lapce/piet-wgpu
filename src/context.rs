@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashMap};
 
 use crate::{
     pipeline::{GpuVertex, Primitive},
@@ -30,18 +30,37 @@ pub struct WgpuRenderContext<'a> {
     clip_stack: Vec<[f32; 4]>,
     pub(crate) primitives: Vec<Primitive>,
     pub(crate) depth: u32,
+    pub(crate) alpha_depth: usize,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct Layer {
     pub quads: Vec<Quad>,
-    pub transparent_quads: Vec<Quad>,
+    pub triangles: VertexBuffers<Vertex, u32>,
+    pub transparent_layer: HashMap<usize, TransparentLayer>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TransparentLayer {
+    pub quads: Vec<Quad>,
     pub blurred_quads: Vec<BlurQuad>,
     pub triangles: VertexBuffers<Vertex, u32>,
-    pub transparent_triangles: VertexBuffers<Vertex, u32>,
     pub texts: Vec<Tex>,
     pub color_texts: Vec<Tex>,
     pub svgs: Vec<Tex>,
+}
+
+impl TransparentLayer {
+    pub fn new() -> Self {
+        Self {
+            quads: Vec::new(),
+            blurred_quads: Vec::new(),
+            triangles: VertexBuffers::new(),
+            texts: Vec::new(),
+            color_texts: Vec::new(),
+            svgs: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
@@ -92,23 +111,46 @@ struct State {
     /// This invariant should hold: transform * rel_transform = cur_transform
     transform: Affine,
     n_clip: usize,
+    alpha_depth: usize,
 }
 
 impl Layer {
     fn new() -> Self {
         Self {
             quads: Vec::new(),
-            blurred_quads: Vec::new(),
             triangles: VertexBuffers::new(),
-            transparent_quads: Vec::new(),
-            transparent_triangles: VertexBuffers::new(),
-            texts: Vec::new(),
-            color_texts: Vec::new(),
-            svgs: Vec::new(),
+            transparent_layer: HashMap::new(),
         }
     }
 
-    fn add_quad(&mut self, rect: [f32; 4], color: [f32; 4], depth: f32, clip: [f32; 4]) {
+    fn get_triangles(
+        &mut self,
+        transparent: bool,
+        alpha_depth: usize,
+    ) -> &mut VertexBuffers<Vertex, u32> {
+        if !transparent {
+            &mut self.triangles
+        } else {
+            if !self.transparent_layer.contains_key(&alpha_depth) {
+                self.transparent_layer
+                    .insert(alpha_depth, TransparentLayer::new());
+            }
+            &mut self
+                .transparent_layer
+                .get_mut(&alpha_depth)
+                .unwrap()
+                .triangles
+        }
+    }
+
+    fn add_quad(
+        &mut self,
+        rect: [f32; 4],
+        color: [f32; 4],
+        depth: f32,
+        clip: [f32; 4],
+        alpha_depth: usize,
+    ) {
         let quad = Quad {
             rect,
             color,
@@ -116,7 +158,15 @@ impl Layer {
             clip,
         };
         if color[3] < 1.0 {
-            self.transparent_quads.push(quad);
+            if !self.transparent_layer.contains_key(&alpha_depth) {
+                self.transparent_layer
+                    .insert(alpha_depth, TransparentLayer::new());
+            }
+            self.transparent_layer
+                .get_mut(&alpha_depth)
+                .unwrap()
+                .quads
+                .push(quad);
         } else {
             self.quads.push(quad);
         }
@@ -130,6 +180,7 @@ impl Layer {
         color: [f32; 4],
         depth: f32,
         clip: [f32; 4],
+        alpha_depth: usize,
     ) {
         let quad = BlurQuad {
             rect,
@@ -139,19 +190,52 @@ impl Layer {
             depth,
             clip,
         };
-        self.blurred_quads.push(quad);
+
+        if !self.transparent_layer.contains_key(&alpha_depth) {
+            self.transparent_layer
+                .insert(alpha_depth, TransparentLayer::new());
+        }
+        self.transparent_layer
+            .get_mut(&alpha_depth)
+            .unwrap()
+            .blurred_quads
+            .push(quad);
     }
 
-    pub fn add_text(&mut self, mut text: Vec<Tex>) {
-        self.texts.append(&mut text);
+    pub fn add_text(&mut self, mut text: Vec<Tex>, alpha_depth: usize) {
+        if !self.transparent_layer.contains_key(&alpha_depth) {
+            self.transparent_layer
+                .insert(alpha_depth, TransparentLayer::new());
+        }
+        self.transparent_layer
+            .get_mut(&alpha_depth)
+            .unwrap()
+            .texts
+            .append(&mut text);
     }
 
-    pub fn add_color_text(&mut self, mut text: Vec<Tex>) {
-        self.color_texts.append(&mut text);
+    pub fn add_color_text(&mut self, mut text: Vec<Tex>, alpha_depth: usize) {
+        if !self.transparent_layer.contains_key(&alpha_depth) {
+            self.transparent_layer
+                .insert(alpha_depth, TransparentLayer::new());
+        }
+        self.transparent_layer
+            .get_mut(&alpha_depth)
+            .unwrap()
+            .color_texts
+            .append(&mut text);
     }
 
-    pub fn add_svg(&mut self, svg: Tex) {
-        self.svgs.push(svg);
+    pub fn add_svg(&mut self, svg: Tex, alpha_depth: usize) {
+        if !self.transparent_layer.contains_key(&alpha_depth) {
+            self.transparent_layer
+                .insert(alpha_depth, TransparentLayer::new());
+        }
+        self.transparent_layer
+            .get_mut(&alpha_depth)
+            .unwrap()
+            .svgs
+            .push(svg);
     }
 
     fn draw(&self, renderer: &mut WgpuRenderer, max_depth: u32) {
@@ -178,69 +262,82 @@ impl Layer {
 
         unsafe {
             renderer.gl.depth_mask(false);
-            renderer.gl.enable(glow::BLEND);
-            renderer.gl.blend_equation(glow::FUNC_ADD);
-            renderer
-                .gl
-                .blend_func(glow::SRC1_COLOR, glow::ONE_MINUS_SRC1_COLOR);
         }
-        renderer.tex_pipeline.draw(
-            &renderer.gl,
-            &self.texts,
-            1.0,
-            &view_proj,
-            max_depth,
-            renderer.text.cache.borrow().gl_texture,
-            true,
-        );
 
-        unsafe {
-            renderer.gl.enable(glow::BLEND);
-            renderer.gl.blend_equation(glow::FUNC_ADD);
+        let mut depths: Vec<&usize> = self.transparent_layer.keys().collect();
+        depths.sort();
+        for depth in depths {
+            let layer = self.transparent_layer.get(depth).unwrap();
+
+            unsafe {
+                renderer.gl.enable(glow::BLEND);
+                renderer.gl.blend_equation(glow::FUNC_ADD);
+                renderer
+                    .gl
+                    .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            }
             renderer
-                .gl
-                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-        }
-        renderer.tex_pipeline.draw(
-            &renderer.gl,
-            &self.svgs,
-            scale,
-            &view_proj,
-            max_depth,
-            renderer.svg_store.cache.gl_texture,
-            false,
-        );
-        renderer.tex_pipeline.draw(
-            &renderer.gl,
-            &self.color_texts,
-            scale,
-            &view_proj,
-            max_depth,
-            renderer.text.cache.borrow().gl_texture,
-            false,
-        );
+                .quad_pipeline
+                .draw(&renderer.gl, &layer.quads, scale, &view_proj, max_depth);
+            renderer.triangle_pipeline.draw(
+                &renderer.gl,
+                &layer.triangles,
+                scale,
+                &view_proj,
+                max_depth,
+            );
 
-        renderer.quad_pipeline.draw(
-            &renderer.gl,
-            &self.transparent_quads,
-            scale,
-            &view_proj,
-            max_depth,
-        );
-        renderer.blur_quad_pipeline.draw(
-            &renderer.gl,
-            &self.blurred_quads,
-            scale,
-            &view_proj,
-            max_depth,
-        );
-        renderer.triangle_pipeline.draw(
-            &renderer.gl,
-            &self.transparent_triangles,
-            scale,
-            &view_proj,
-            max_depth,
-        );
+            renderer.tex_pipeline.draw(
+                &renderer.gl,
+                &layer.color_texts,
+                scale,
+                &view_proj,
+                max_depth,
+                renderer.text.cache.borrow().gl_texture,
+                false,
+            );
+            renderer.tex_pipeline.draw(
+                &renderer.gl,
+                &layer.svgs,
+                scale,
+                &view_proj,
+                max_depth,
+                renderer.svg_store.cache.gl_texture,
+                false,
+            );
+
+            unsafe {
+                renderer.gl.enable(glow::BLEND);
+                renderer.gl.blend_equation(glow::FUNC_ADD);
+                renderer
+                    .gl
+                    .blend_func(glow::SRC1_COLOR, glow::ONE_MINUS_SRC1_COLOR);
+            }
+            renderer.tex_pipeline.draw(
+                &renderer.gl,
+                &layer.texts,
+                1.0,
+                &view_proj,
+                max_depth,
+                renderer.text.cache.borrow().gl_texture,
+                true,
+            );
+
+            unsafe {
+                renderer.gl.enable(glow::BLEND);
+                renderer.gl.blend_equation(glow::FUNC_ADD);
+                renderer
+                    .gl
+                    .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            }
+            renderer.blur_quad_pipeline.draw(
+                &renderer.gl,
+                &layer.blurred_quads,
+                scale,
+                &view_proj,
+                max_depth,
+            );
+        }
 
         unsafe {
             renderer.gl.disable(glow::BLEND);
@@ -250,13 +347,9 @@ impl Layer {
 
     fn reset(&mut self) {
         self.quads.clear();
-        self.blurred_quads.clear();
         self.triangles.vertices.clear();
         self.triangles.indices.clear();
-        self.transparent_quads.clear();
-        self.transparent_triangles.vertices.clear();
-        self.transparent_triangles.indices.clear();
-        self.texts.clear();
+        self.transparent_layer.clear();
     }
 }
 
@@ -277,6 +370,7 @@ impl<'a> WgpuRenderContext<'a> {
             clip_stack: Vec::new(),
             primitives: Vec::new(),
             depth: 0,
+            alpha_depth: 0,
         };
         context.add_primitive();
         context
@@ -305,6 +399,14 @@ impl<'a> WgpuRenderContext<'a> {
             clip_rect,
             ..Default::default()
         });
+    }
+
+    pub fn set_alpha_depth(&mut self, alpha_depth: usize) {
+        self.alpha_depth = alpha_depth;
+    }
+
+    pub fn incr_alpha_depth(&mut self) {
+        self.alpha_depth += 1;
     }
 
     pub fn draw_svg(&mut self, svg: &Svg, rect: Rect, override_color: Option<&Color>) {
@@ -337,7 +439,7 @@ impl<'a> WgpuRenderContext<'a> {
                 depth,
                 clip,
             };
-            self.layer.add_svg(tex);
+            self.layer.add_svg(tex, self.alpha_depth);
         }
     }
 
@@ -419,11 +521,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         let depth = self.depth as f32;
         let clip = self.current_clip();
 
-        let triangles = if color[3] < 1.0 {
-            &mut self.layer.transparent_triangles
-        } else {
-            &mut self.layer.triangles
-        };
+        let triangles = self.layer.get_triangles(color[3] < 1.0, self.alpha_depth);
         let mut stroke_builder = BuffersBuilder::new(triangles, |vertex: StrokeVertex| {
             let mut pos = vertex.position_on_path().to_array();
             let normal = vertex.normal().to_array();
@@ -539,6 +637,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 color,
                 depth,
                 clip,
+                self.alpha_depth,
             );
         }
     }
@@ -569,6 +668,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             rel_transform: Affine::default(),
             transform: self.cur_transform,
             n_clip: 0,
+            alpha_depth: self.alpha_depth,
         });
         Ok(())
     }
@@ -576,6 +676,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
     fn restore(&mut self) -> Result<(), piet::Error> {
         if let Some(state) = self.state_stack.pop() {
             self.cur_transform = state.transform;
+            self.alpha_depth = state.alpha_depth;
             for _ in 0..state.n_clip {
                 self.pop_clip();
             }
@@ -680,6 +781,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
             color,
             depth,
             clip_rect,
+            self.alpha_depth,
         );
     }
 

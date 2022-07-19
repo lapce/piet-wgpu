@@ -133,8 +133,8 @@ impl WgpuTextLayout {
             }
         }
 
-        ctx.layer.add_text(instances);
-        ctx.layer.add_color_text(color_instances);
+        ctx.layer.add_text(instances, ctx.alpha_depth);
+        ctx.layer.add_color_text(color_instances, ctx.alpha_depth);
     }
 }
 
