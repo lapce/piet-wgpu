@@ -10,7 +10,8 @@ use crate::{
 use bytemuck::{Pod, Zeroable};
 use glow::HasContext;
 use lyon::lyon_tessellation::{
-    BuffersBuilder, FillTessellator, StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
+    BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
+    StrokeVertex, VertexBuffers,
 };
 use lyon::tessellation;
 use piet::{
@@ -621,10 +622,10 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
 
         self.depth += 1;
         let depth = self.depth as f32;
+        let brush = brush.make_brush(self, || shape.bounding_box()).into_owned();
+        let Brush::Solid(color) = brush;
+        let color = format_color(&color);
         if let Some(rect) = shape.as_rect() {
-            let brush = brush.make_brush(self, || shape.bounding_box()).into_owned();
-            let Brush::Solid(color) = brush;
-            let color = format_color(&color);
             let rect = rect + Vec2::new(affine[4], affine[5]);
 
             self.layer.add_quad(
@@ -638,6 +639,23 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 depth,
                 clip,
                 self.alpha_depth,
+            );
+        } else if let Some(circle) = shape.as_circle() {
+            let triangles = self.layer.get_triangles(color[3] < 1.0, self.alpha_depth);
+            let mut vertex_builder = BuffersBuilder::new(triangles, |vertex: FillVertex| {
+                let pos = vertex.position().to_array();
+                Vertex {
+                    pos,
+                    color,
+                    depth,
+                    clip,
+                }
+            });
+            let _ = self.fill_tess.tessellate_circle(
+                lyon::geom::Point::new(circle.center.x as f32, circle.center.y as f32),
+                circle.radius as f32,
+                &FillOptions::tolerance(0.02),
+                &mut vertex_builder,
             );
         }
     }
