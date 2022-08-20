@@ -652,7 +652,10 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
                 }
             });
             let _ = self.fill_tess.tessellate_circle(
-                lyon::geom::Point::new(circle.center.x as f32, circle.center.y as f32),
+                lyon::geom::Point::new(
+                    (circle.center.x + affine[4]) as f32,
+                    (circle.center.y + affine[5]) as f32,
+                ),
                 circle.radius as f32,
                 &FillOptions::tolerance(0.02),
                 &mut vertex_builder,
