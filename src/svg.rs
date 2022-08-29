@@ -4,7 +4,7 @@ use glow::HasContext;
 use linked_hash_map::LinkedHashMap;
 use piet::kurbo::{Point, Rect, Size};
 use sha2::{Digest, Sha256};
-
+use resvg::usvg;
 #[derive(Clone)]
 pub struct Svg {
     hash: Vec<u8>,
@@ -164,7 +164,7 @@ impl SvgCache {
             return Ok(&row.svgs[*index]);
         }
 
-        let transform = tiny_skia::Transform::identity();
+        let transform = tiny_skia::Transform{ sx: todo!(), kx: todo!(), ky: todo!(), sy: todo!(), tx: todo!(), ty: todo!() };
         let mut img = tiny_skia::Pixmap::new(width, height).ok_or(piet::Error::InvalidInput)?;
 
         let _ = resvg::render(

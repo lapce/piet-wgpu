@@ -8,21 +8,20 @@ resolver = "2"
 
 [dependencies]
 log = "0.4.14"
-hashbrown = "0.11.2"
-unicode-width = "0.1.8"
-include_dir = "0.6.0"
-sha2 = "0.9.8"
-tiny-skia = "0.6.3"
-resvg = "0.22.0"
-usvg = "0.22.0"
+hashbrown = "0.12.3"
+unicode-width = "0.1.9"
+include_dir = "0.7.2"
+sha2 = "0.10.2"
+tiny-skia = "0.8.0"
+resvg = { git = "https://github.com/ghishadow/resvg", branch = "master", version = "0.23.0"}
 linked-hash-map = "0.5.4"
 pathfinder_geometry = "0.5.1"
-lyon = "0.17.5"
-piet = "0.4.0"
+lyon = "0.17.10"
+piet = "0.5.0"
 swash = { git = "https://github.com/lapce/swash" }
 # swash = { path = "../workspaces/swash" }
 parley = { git = "https://github.com/lapce/parley" }
 # parley = { path = "../workspaces/parley" }
 glow = "0.11.2"
-glam = "0.10"
+glam = "0.21.3"
 bytemuck = { version = "1.7.2", features = ["derive"] }
