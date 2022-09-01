@@ -164,7 +164,7 @@ impl SvgCache {
             return Ok(&row.svgs[*index]);
         }
 
-        let transform = tiny_skia::Transform{ sx: todo!(), kx: todo!(), ky: todo!(), sy: todo!(), tx: todo!(), ty: todo!() };
+        let transform = tiny_skia::Transform::default();
         let mut img = tiny_skia::Pixmap::new(width, height).ok_or(piet::Error::InvalidInput)?;
 
         let _ = resvg::render(
