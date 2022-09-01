@@ -164,7 +164,7 @@ impl SvgCache {
             return Ok(&row.svgs[*index]);
         }
 
-        let transform = tiny_skia::Transform::IDENTITY;
+        let transform = tiny_skia::Transform::identity();
         let mut img = tiny_skia::Pixmap::new(width, height).ok_or(piet::Error::InvalidInput)?;
 
         let _ = resvg::render(
