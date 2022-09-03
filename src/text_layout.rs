@@ -136,6 +136,25 @@ impl WgpuTextLayout {
         ctx.layer.add_text(instances, ctx.alpha_depth);
         ctx.layer.add_color_text(color_instances, ctx.alpha_depth);
     }
+
+    pub fn cap_center(&self) -> f64 {
+        if let Some(line) = self.layout.get(0) {
+            let metrics = line.metrics();
+            metrics.cap_height as f64 / 2.0 + (metrics.ascent - metrics.cap_height) as f64
+        } else {
+            0.0
+        }
+    }
+
+    pub fn y_offset(&self, height: f64) -> f64 {
+        if let Some(line) = self.layout.get(0) {
+            let metrics = line.metrics();
+            (height - metrics.cap_height as f64) / 2.0
+                - (metrics.ascent - metrics.cap_height) as f64
+        } else {
+            0.0
+        }
+    }
 }
 
 pub struct WgpuTextLayoutBuilder {
@@ -264,17 +283,10 @@ impl TextLayout for WgpuTextLayout {
     fn line_metric(&self, line_number: usize) -> Option<LineMetric> {
         let line = self.layout.get(line_number)?;
         let range = line.text_range();
-        let trailing_whitespace = self
-            .line_text(line_number)?
-            .chars()
-            .rev()
-            .take_while(|ch| ch.is_whitespace())
-            .map(|ch| ch.len_utf8())
-            .sum();
         let metrics = line.metrics();
-        let y_offset =
-            metrics.baseline as f64 - metrics.ascent as f64 - metrics.leading as f64 * 0.5;
-        let baseline = metrics.baseline as f64 - y_offset;
+        let y_offset = metrics.cap_height as f64;
+        let baseline = metrics.ascent as f64;
+        let trailing_whitespace = metrics.trailing_whitespace as usize;
         Some(LineMetric {
             start_offset: range.start,
             end_offset: range.end,
