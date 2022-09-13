@@ -149,8 +149,12 @@ impl WgpuTextLayout {
     pub fn y_offset(&self, height: f64) -> f64 {
         if let Some(line) = self.layout.get(0) {
             let metrics = line.metrics();
-            (height - metrics.cap_height as f64) / 2.0
-                - (metrics.ascent - metrics.cap_height) as f64
+            if metrics.cap_height > 0.0 {
+                (height - metrics.cap_height as f64) / 2.0
+                    - (metrics.ascent - metrics.cap_height) as f64
+            } else {
+                (height - metrics.ascent as f64) / 2.0
+            }
         } else {
             0.0
         }
