@@ -291,7 +291,7 @@ impl Layer {
             renderer.tex_pipeline.draw(
                 &renderer.gl,
                 &layer.color_texts,
-                scale,
+                1.0,
                 &view_proj,
                 max_depth,
                 renderer.text.cache.borrow().gl_texture,
