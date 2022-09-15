@@ -9,6 +9,7 @@ use crate::{
 };
 use bytemuck::{Pod, Zeroable};
 use glow::HasContext;
+use image::RgbaImage;
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
     StrokeVertex, VertexBuffers,
@@ -18,6 +19,7 @@ use piet::{
     kurbo::{Affine, Point, Rect, Shape, Vec2},
     Color, Image, IntoBrush, RenderContext,
 };
+use sha2::{Digest, Sha256};
 
 pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
@@ -488,7 +490,10 @@ pub enum Brush {
     Solid(Color),
 }
 
-pub struct WgpuImage {}
+pub struct WgpuImage {
+    pub img: RgbaImage,
+    pub(crate) hash: Vec<u8>,
+}
 
 impl<'a> RenderContext for WgpuRenderContext<'a> {
     type Brush = Brush;
@@ -734,12 +739,19 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
 
     fn make_image(
         &mut self,
-        width: usize,
-        height: usize,
+        _width: usize,
+        _height: usize,
         buf: &[u8],
-        format: piet::ImageFormat,
+        _format: piet::ImageFormat,
     ) -> Result<Self::Image, piet::Error> {
-        todo!()
+        let img = image::load_from_memory(buf).map_err(|_| piet::Error::NotSupported)?;
+        let img = img.into_rgba8();
+
+        let mut hasher = Sha256::new();
+        hasher.update(buf);
+        let hash = hasher.finalize().to_vec();
+
+        Ok(WgpuImage { img, hash })
     }
 
     fn draw_image(

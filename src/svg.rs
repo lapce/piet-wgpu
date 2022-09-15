@@ -5,6 +5,8 @@ use linked_hash_map::LinkedHashMap;
 use piet::kurbo::{Point, Rect, Size};
 use sha2::{Digest, Sha256};
 
+use crate::context::WgpuImage;
+
 #[derive(Clone)]
 pub struct Svg {
     hash: Vec<u8>,
@@ -119,7 +121,7 @@ impl SvgCache {
         }
     }
 
-    pub fn update(
+    fn update(
         &mut self,
         gl: &glow::Context,
         offset: [u32; 2],
@@ -146,6 +148,90 @@ impl SvgCache {
         }
     }
 
+    fn update_atlas(
+        &mut self,
+        gl: &glow::Context,
+        info: &SvgInfo,
+        data: &[u8],
+    ) -> Result<(), piet::Error> {
+        let scale = self.scale;
+        let glyph_rect = Size::new(info.width as f64, info.height as f64).to_rect();
+        let mut offset = [0, 0];
+        let mut inserted = false;
+        for (row_number, row) in self.rows.iter_mut().rev() {
+            if row.height == info.height && self.width - row.width > info.width {
+                let origin = Point::new(row.width as f64, row.y as f64);
+                let glyph_pos =
+                    svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+
+                row.svgs.push(glyph_pos);
+                offset[0] = row.width;
+                offset[1] = row.y;
+                row.width += info.width;
+                self.svgs
+                    .insert(info.clone(), (*row_number, row.svgs.len() - 1));
+                inserted = true;
+                break;
+            }
+        }
+
+        if !inserted {
+            let mut y = 0;
+            if !self.rows.is_empty() {
+                let last_row = self.rows.get(&(self.rows.len() - 1)).unwrap();
+                y = last_row.y + last_row.height;
+            }
+            if self.height < y + info.height {
+                return Err(piet::Error::MissingFont);
+            }
+
+            let origin = Point::new(0.0, y as f64);
+            let svg_pos = svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+
+            offset[0] = 0;
+            offset[1] = y;
+            let new_row = self.rows.len();
+            let svgs = vec![svg_pos];
+            let row = SvgRow {
+                y,
+                height: info.height,
+                width: info.width,
+                svgs,
+            };
+
+            self.rows.insert(new_row, row);
+            self.svgs.insert(info.clone(), (new_row, 0));
+        }
+
+        self.update(gl, offset, data, info.width, info.height);
+
+        Ok(())
+    }
+
+    pub(crate) fn get_img(
+        &mut self,
+        gl: &glow::Context,
+        img: &WgpuImage,
+    ) -> Result<&SvgPosInfo, piet::Error> {
+        let (width, height) = img.img.dimensions();
+        let info = SvgInfo {
+            hash: img.hash.clone(),
+            width,
+            height,
+        };
+
+        if let Some((row, index)) = self.svgs.get(&info) {
+            let row = self.rows.get(row).unwrap();
+            return Ok(&row.svgs[*index]);
+        }
+
+        self.update_atlas(gl, &info, img.img.as_raw().as_slice())?;
+
+        let (row, index) = self.svgs.get(&info).unwrap();
+        let row = self.rows.get(row).unwrap();
+        Ok(&row.svgs[*index])
+    }
+
     pub(crate) fn get_svg(
         &mut self,
         gl: &glow::Context,
@@ -167,7 +253,7 @@ impl SvgCache {
         let transform = tiny_skia::Transform::identity();
         let mut img = tiny_skia::Pixmap::new(width, height).ok_or(piet::Error::InvalidInput)?;
 
-        let _ = resvg::render(
+        resvg::render(
             &svg.tree,
             if width > height {
                 usvg::FitTo::Width(width)
@@ -179,57 +265,8 @@ impl SvgCache {
         )
         .ok_or(piet::Error::InvalidInput)?;
 
-        let scale = self.scale;
-        let glyph_rect = Size::new(width as f64, height as f64).to_rect();
-        let mut offset = [0, 0];
-        let mut inserted = false;
-        for (row_number, row) in self.rows.iter_mut().rev() {
-            if row.height == height && self.width - row.width > width {
-                let origin = Point::new(row.width as f64, row.y as f64);
-                let glyph_pos =
-                    svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
-
-                row.svgs.push(glyph_pos);
-                offset[0] = row.width;
-                offset[1] = row.y;
-                row.width += width;
-                self.svgs
-                    .insert(svg_info.clone(), (*row_number, row.svgs.len() - 1));
-                inserted = true;
-                break;
-            }
-        }
-
-        if !inserted {
-            let mut y = 0;
-            if !self.rows.is_empty() {
-                let last_row = self.rows.get(&(self.rows.len() - 1)).unwrap();
-                y = last_row.y + last_row.height;
-            }
-            if self.height < y + height {
-                return Err(piet::Error::MissingFont);
-            }
-
-            let origin = Point::new(0.0, y as f64);
-            let svg_pos = svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
-
-            offset[0] = 0;
-            offset[1] = y;
-            let new_row = self.rows.len();
-            let svgs = vec![svg_pos];
-            let row = SvgRow {
-                y,
-                height,
-                width,
-                svgs,
-            };
-
-            self.rows.insert(new_row, row);
-            self.svgs.insert(svg_info.clone(), (new_row, 0));
-        }
-
         let data = img.take();
-        self.update(gl, offset, &data, width, height);
+        self.update_atlas(gl, &svg_info, &data)?;
 
         let (row, index) = self.svgs.get(&svg_info).unwrap();
         let row = self.rows.get(row).unwrap();
