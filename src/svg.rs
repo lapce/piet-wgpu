@@ -31,41 +31,37 @@ impl FromStr for Svg {
     }
 }
 
-pub(crate) struct SvgStore {
-    pub(crate) cache: SvgCache,
-}
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Default)]
-pub(crate) struct SvgInfo {
+pub(crate) struct AtlasInfo {
     hash: Vec<u8>,
     width: u32,
     height: u32,
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct SvgPosInfo {
+pub(crate) struct AtlasPosInfo {
     pub(crate) rect: Rect,
     pub(crate) cache_rect: Rect,
 }
 
-struct SvgRow {
+struct AtlasRow {
     y: u32,
     height: u32,
     width: u32,
-    svgs: Vec<SvgPosInfo>,
+    maps: Vec<AtlasPosInfo>,
 }
 
-pub struct SvgCache {
+pub struct AtlasCache {
     pub gl_texture: glow::Texture,
     width: u32,
     height: u32,
 
-    rows: LinkedHashMap<usize, SvgRow>,
-    svgs: HashMap<SvgInfo, (usize, usize)>,
+    rows: LinkedHashMap<usize, AtlasRow>,
+    maps: HashMap<AtlasInfo, (usize, usize)>,
     pub(crate) scale: f64,
 }
 
-impl SvgCache {
+impl AtlasCache {
     pub fn new(gl: &glow::Context) -> Self {
         let width = 2000;
         let height = 2000;
@@ -116,7 +112,7 @@ impl SvgCache {
             width,
             height,
             rows: LinkedHashMap::new(),
-            svgs: HashMap::new(),
+            maps: HashMap::new(),
             scale: 1.0,
         }
     }
@@ -151,25 +147,25 @@ impl SvgCache {
     fn update_atlas(
         &mut self,
         gl: &glow::Context,
-        info: &SvgInfo,
+        info: &AtlasInfo,
         data: &[u8],
     ) -> Result<(), piet::Error> {
         let scale = self.scale;
-        let glyph_rect = Size::new(info.width as f64, info.height as f64).to_rect();
+        let atlas_rect = Size::new(info.width as f64, info.height as f64).to_rect();
         let mut offset = [0, 0];
         let mut inserted = false;
         for (row_number, row) in self.rows.iter_mut().rev() {
             if row.height == info.height && self.width - row.width > info.width {
                 let origin = Point::new(row.width as f64, row.y as f64);
                 let glyph_pos =
-                    svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+                    atlas_rect_to_pos(atlas_rect, origin, scale, [self.width, self.height]);
 
-                row.svgs.push(glyph_pos);
+                row.maps.push(glyph_pos);
                 offset[0] = row.width;
                 offset[1] = row.y;
                 row.width += info.width;
-                self.svgs
-                    .insert(info.clone(), (*row_number, row.svgs.len() - 1));
+                self.maps
+                    .insert(info.clone(), (*row_number, row.maps.len() - 1));
                 inserted = true;
                 break;
             }
@@ -186,21 +182,21 @@ impl SvgCache {
             }
 
             let origin = Point::new(0.0, y as f64);
-            let svg_pos = svg_rect_to_pos(glyph_rect, origin, scale, [self.width, self.height]);
+            let atlas_pos = atlas_rect_to_pos(atlas_rect, origin, scale, [self.width, self.height]);
 
             offset[0] = 0;
             offset[1] = y;
             let new_row = self.rows.len();
-            let svgs = vec![svg_pos];
-            let row = SvgRow {
+            let maps = vec![atlas_pos];
+            let row = AtlasRow {
                 y,
                 height: info.height,
                 width: info.width,
-                svgs,
+                maps,
             };
 
             self.rows.insert(new_row, row);
-            self.svgs.insert(info.clone(), (new_row, 0));
+            self.maps.insert(info.clone(), (new_row, 0));
         }
 
         self.update(gl, offset, data, info.width, info.height);
@@ -212,24 +208,24 @@ impl SvgCache {
         &mut self,
         gl: &glow::Context,
         img: &WgpuImage,
-    ) -> Result<&SvgPosInfo, piet::Error> {
+    ) -> Result<&AtlasPosInfo, piet::Error> {
         let (width, height) = img.img.dimensions();
-        let info = SvgInfo {
+        let info = AtlasInfo {
             hash: img.hash.clone(),
             width,
             height,
         };
 
-        if let Some((row, index)) = self.svgs.get(&info) {
+        if let Some((row, index)) = self.maps.get(&info) {
             let row = self.rows.get(row).unwrap();
-            return Ok(&row.svgs[*index]);
+            return Ok(&row.maps[*index]);
         }
 
         self.update_atlas(gl, &info, img.img.as_raw().as_slice())?;
 
-        let (row, index) = self.svgs.get(&info).unwrap();
+        let (row, index) = self.maps.get(&info).unwrap();
         let row = self.rows.get(row).unwrap();
-        Ok(&row.svgs[*index])
+        Ok(&row.maps[*index])
     }
 
     pub(crate) fn get_svg(
@@ -237,17 +233,17 @@ impl SvgCache {
         gl: &glow::Context,
         svg: &Svg,
         [width, height]: [f32; 2],
-    ) -> Result<&SvgPosInfo, piet::Error> {
+    ) -> Result<&AtlasPosInfo, piet::Error> {
         let (width, height) = (width.ceil() as u32, height.ceil() as u32);
-        let svg_info = SvgInfo {
+        let info = AtlasInfo {
             hash: svg.hash.clone(),
             width,
             height,
         };
 
-        if let Some((row, index)) = self.svgs.get(&svg_info) {
+        if let Some((row, index)) = self.maps.get(&info) {
             let row = self.rows.get(row).unwrap();
-            return Ok(&row.svgs[*index]);
+            return Ok(&row.maps[*index]);
         }
 
         let transform = tiny_skia::Transform::identity();
@@ -266,33 +262,25 @@ impl SvgCache {
         .ok_or(piet::Error::InvalidInput)?;
 
         let data = img.take();
-        self.update_atlas(gl, &svg_info, &data)?;
+        self.update_atlas(gl, &info, &data)?;
 
-        let (row, index) = self.svgs.get(&svg_info).unwrap();
+        let (row, index) = self.maps.get(&info).unwrap();
         let row = self.rows.get(row).unwrap();
-        Ok(&row.svgs[*index])
+        Ok(&row.maps[*index])
     }
 }
 
-impl SvgStore {
-    pub(crate) fn new(gl: &glow::Context) -> Self {
-        Self {
-            cache: SvgCache::new(gl),
-        }
-    }
-}
-
-fn svg_rect_to_pos(glyph_rect: Rect, origin: Point, scale: f64, size: [u32; 2]) -> SvgPosInfo {
-    let mut cache_rect = glyph_rect.with_origin(origin);
+fn atlas_rect_to_pos(atlas_rect: Rect, origin: Point, scale: f64, size: [u32; 2]) -> AtlasPosInfo {
+    let mut cache_rect = atlas_rect.with_origin(origin);
     cache_rect.x0 /= size[0] as f64;
     cache_rect.x1 /= size[0] as f64;
     cache_rect.y0 /= size[1] as f64;
     cache_rect.y1 /= size[1] as f64;
 
-    SvgPosInfo {
-        rect: glyph_rect.with_size(Size::new(
-            glyph_rect.size().width / scale,
-            glyph_rect.size().height / scale,
+    AtlasPosInfo {
+        rect: atlas_rect.with_size(Size::new(
+            atlas_rect.size().width / scale,
+            atlas_rect.size().height / scale,
         )),
         cache_rect,
     }
