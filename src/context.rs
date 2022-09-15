@@ -9,6 +9,7 @@ use crate::{
 };
 use bytemuck::{Pod, Zeroable};
 use glow::HasContext;
+use image::RgbaImage;
 use lyon::lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
     StrokeVertex, VertexBuffers,
@@ -18,6 +19,7 @@ use piet::{
     kurbo::{Affine, Point, Rect, Shape, Vec2},
     Color, Image, IntoBrush, RenderContext,
 };
+use sha2::{Digest, Sha256};
 
 pub struct WgpuRenderContext<'a> {
     pub(crate) renderer: &'a mut WgpuRenderer,
@@ -48,7 +50,7 @@ pub(crate) struct TransparentLayer {
     pub triangles: VertexBuffers<Vertex, u32>,
     pub texts: Vec<Tex>,
     pub color_texts: Vec<Tex>,
-    pub svgs: Vec<Tex>,
+    pub atlas: Vec<Tex>,
 }
 
 impl TransparentLayer {
@@ -59,7 +61,7 @@ impl TransparentLayer {
             triangles: VertexBuffers::new(),
             texts: Vec::new(),
             color_texts: Vec::new(),
-            svgs: Vec::new(),
+            atlas: Vec::new(),
         }
     }
 }
@@ -227,7 +229,7 @@ impl Layer {
             .append(&mut text);
     }
 
-    pub fn add_svg(&mut self, svg: Tex, alpha_depth: usize) {
+    pub fn add_atlas(&mut self, atlas: Tex, alpha_depth: usize) {
         if !self.transparent_layer.contains_key(&alpha_depth) {
             self.transparent_layer
                 .insert(alpha_depth, TransparentLayer::new());
@@ -235,8 +237,8 @@ impl Layer {
         self.transparent_layer
             .get_mut(&alpha_depth)
             .unwrap()
-            .svgs
-            .push(svg);
+            .atlas
+            .push(atlas);
     }
 
     fn draw(&self, renderer: &mut WgpuRenderer, max_depth: u32) {
@@ -299,11 +301,11 @@ impl Layer {
             );
             renderer.tex_pipeline.draw(
                 &renderer.gl,
-                &layer.svgs,
+                &layer.atlas,
                 scale,
                 &view_proj,
                 max_depth,
-                renderer.svg_store.cache.gl_texture,
+                renderer.atlas_cache.gl_texture,
                 false,
             );
 
@@ -415,7 +417,7 @@ impl<'a> WgpuRenderContext<'a> {
         let affine = self.cur_transform.as_coeffs();
         let clip = self.current_clip();
         let scale = self.renderer.scale;
-        if let Ok(svg) = self.renderer.svg_store.cache.get_svg(
+        if let Ok(svg) = self.renderer.atlas_cache.get_svg(
             &self.renderer.gl,
             svg,
             [rect.width() as f32 * scale, rect.height() as f32 * scale],
@@ -440,7 +442,7 @@ impl<'a> WgpuRenderContext<'a> {
                 depth,
                 clip,
             };
-            self.layer.add_svg(tex, self.alpha_depth);
+            self.layer.add_atlas(tex, self.alpha_depth);
         }
     }
 
@@ -488,7 +490,10 @@ pub enum Brush {
     Solid(Color),
 }
 
-pub struct WgpuImage {}
+pub struct WgpuImage {
+    pub img: RgbaImage,
+    pub(crate) hash: Vec<u8>,
+}
 
 impl<'a> RenderContext for WgpuRenderContext<'a> {
     type Brush = Brush;
@@ -734,21 +739,51 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
 
     fn make_image(
         &mut self,
-        width: usize,
-        height: usize,
+        _width: usize,
+        _height: usize,
         buf: &[u8],
-        format: piet::ImageFormat,
+        _format: piet::ImageFormat,
     ) -> Result<Self::Image, piet::Error> {
-        todo!()
+        let img = image::load_from_memory(buf).map_err(|_| piet::Error::NotSupported)?;
+        let img = img.into_rgba8();
+
+        let mut hasher = Sha256::new();
+        hasher.update(buf);
+        let hash = hasher.finalize().to_vec();
+
+        Ok(WgpuImage { img, hash })
     }
 
     fn draw_image(
         &mut self,
         image: &Self::Image,
         dst_rect: impl Into<piet::kurbo::Rect>,
-        interp: piet::InterpolationMode,
+        _interp: piet::InterpolationMode,
     ) {
-        todo!()
+        let rect: Rect = dst_rect.into();
+        let depth = self.depth as f32;
+        let affine = self.cur_transform.as_coeffs();
+        let clip = self.current_clip();
+        if let Ok(img) = self.renderer.atlas_cache.get_img(&self.renderer.gl, image) {
+            let tex = Tex {
+                rect: [
+                    (rect.x0 + affine[4]).round() as f32,
+                    (rect.y0 + affine[5]).round() as f32,
+                    (rect.x1 + affine[4]).round() as f32,
+                    (rect.y1 + affine[5]).round() as f32,
+                ],
+                tex_rect: [
+                    img.cache_rect.x0 as f32,
+                    img.cache_rect.y0 as f32,
+                    img.cache_rect.x1 as f32,
+                    img.cache_rect.y1 as f32,
+                ],
+                color: [0.0, 0.0, 0.0, 0.0],
+                depth,
+                clip,
+            };
+            self.layer.add_atlas(tex, self.alpha_depth);
+        }
     }
 
     fn draw_image_area(
