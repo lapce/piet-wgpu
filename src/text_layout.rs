@@ -288,15 +288,15 @@ impl TextLayout for WgpuTextLayout {
         let line = self.layout.get(line_number)?;
         let range = line.text_range();
         let metrics = line.metrics();
-        let y_offset = metrics.cap_height as f64;
-        let baseline = metrics.ascent as f64;
+        let y_offset = metrics.ascent as f64;
+        let baseline = metrics.baseline as f64;
         let trailing_whitespace = metrics.trailing_whitespace as usize;
         Some(LineMetric {
             start_offset: range.start,
             end_offset: range.end,
             trailing_whitespace,
             baseline,
-            height: metrics.size() as f64,
+            height: (metrics.ascent + metrics.descent) as f64,
             y_offset,
         })
     }
