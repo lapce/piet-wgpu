@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::{collections::HashMap, str::FromStr};
 
 use glow::HasContext;
@@ -9,8 +10,8 @@ use crate::context::WgpuImage;
 
 #[derive(Clone)]
 pub struct Svg {
-    hash: Vec<u8>,
-    pub(crate) tree: usvg::Tree,
+    hash: Arc<Vec<u8>>,
+    pub(crate) tree: Arc<usvg::Tree>,
 }
 
 unsafe impl Send for Svg {}
@@ -25,7 +26,10 @@ impl FromStr for Svg {
         let hash = hasher.finalize().to_vec();
 
         match usvg::Tree::from_str(s, &usvg::Options::default().to_ref()) {
-            Ok(tree) => Ok(Self { hash, tree }),
+            Ok(tree) => Ok(Self {
+                hash: Arc::new(hash),
+                tree: Arc::new(tree),
+            }),
             Err(err) => Err(err.into()),
         }
     }
@@ -236,7 +240,7 @@ impl AtlasCache {
     ) -> Result<&AtlasPosInfo, piet::Error> {
         let (width, height) = (width.ceil() as u32, height.ceil() as u32);
         let info = AtlasInfo {
-            hash: svg.hash.clone(),
+            hash: (*svg.hash).clone(),
             width,
             height,
         };
