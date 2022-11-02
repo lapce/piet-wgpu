@@ -13,8 +13,8 @@ use glow::HasContext;
 pub use piet::kurbo;
 use piet::kurbo::Size;
 pub use piet::*;
+use svg::AtlasCache;
 pub use svg::Svg;
-use svg::SvgStore;
 
 use std::{marker::PhantomData, path::Path, rc::Rc};
 
@@ -37,7 +37,7 @@ pub struct WgpuRenderer {
     gl: Rc<glow::Context>,
     size: Size,
     scale: f32,
-    svg_store: SvgStore,
+    atlas_cache: AtlasCache,
 
     text: WgpuText,
 
@@ -64,7 +64,7 @@ impl WgpuRenderer {
         Ok(Self {
             text,
             size: Size::ZERO,
-            svg_store: SvgStore::new(&gl),
+            atlas_cache: AtlasCache::new(&gl),
             quad_pipeline,
             blur_quad_pipeline,
             triangle_pipeline,
