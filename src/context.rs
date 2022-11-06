@@ -495,6 +495,19 @@ pub struct WgpuImage {
     pub(crate) hash: Vec<u8>,
 }
 
+impl WgpuImage {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, piet::Error> {
+        let img = image::load_from_memory(buf).map_err(|_| piet::Error::NotSupported)?;
+        let img = img.into_rgba8();
+
+        let mut hasher = Sha256::new();
+        hasher.update(buf);
+        let hash = hasher.finalize().to_vec();
+
+        Ok(WgpuImage { img, hash })
+    }
+}
+
 impl<'a> RenderContext for WgpuRenderContext<'a> {
     type Brush = Brush;
     type Text = WgpuText;
@@ -744,14 +757,7 @@ impl<'a> RenderContext for WgpuRenderContext<'a> {
         buf: &[u8],
         _format: piet::ImageFormat,
     ) -> Result<Self::Image, piet::Error> {
-        let img = image::load_from_memory(buf).map_err(|_| piet::Error::NotSupported)?;
-        let img = img.into_rgba8();
-
-        let mut hasher = Sha256::new();
-        hasher.update(buf);
-        let hash = hasher.finalize().to_vec();
-
-        Ok(WgpuImage { img, hash })
+        WgpuImage::from_bytes(buf)
     }
 
     fn draw_image(
