@@ -873,7 +873,8 @@ impl<'a> IntoBrush<WgpuRenderContext<'a>> for Brush {
 
 impl Image for WgpuImage {
     fn size(&self) -> piet::kurbo::Size {
-        todo!()
+        let (width, height) = self.img.dimensions();
+        piet::kurbo::Size::new(width as f64, height as f64)
     }
 }
 
